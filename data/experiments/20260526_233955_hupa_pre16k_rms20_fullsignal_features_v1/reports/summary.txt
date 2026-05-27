@@ -1,0 +1,77 @@
+HUPA Experiment Summary
+=======================
+
+Experiment name: pre16k_rms20_fullsignal_features_v1
+Dataset root: /mnt/d/masters_degree/datasets/hupa/BDAtos HUPA Segmentada
+Output root: /home/jcesram/PycharmProjects/VoicePathology/data/experiments/20260526_233955_hupa_pre16k_rms20_fullsignal_features_v1
+
+Manifest
+--------
+Total samples: 458
+
+Class distribution:
+label
+healthy         248
+pathological    209
+NaN               1
+Name: count, dtype: int64
+
+Sex distribution:
+sex
+female    272
+male      185
+NaN         1
+Name: count, dtype: int64
+
+Top pathologies:
+pathology
+Laringe Normal. No Patológica                                   248
+Nódulo bilateral                                                 30
+Pólipo pediculado                                                29
+Edema de Reinke bilateral                                        29
+Sulcus en estría                                                 23
+Quiste epidermoide                                               22
+Laringitis crónica hiperplásica                                  19
+Lesión de neurona motora superior                                14
+Laringitis crónica hiperplásica con leucoplasia                  11
+Parálisis periféricas: Recurrente izquierdo                      10
+Parálisis periféricas: Recurrente derecho                         9
+Falta de cierre                                                   6
+Parálisis periféricas                                             2
+Sulcus                                                            2
+Adquiridas traumáticas  iatrógenas sobre las cuerdas vocales      2
+NaN                                                               1
+Alteraciones extrapiramidales                                     1
+Name: count, dtype: int64
+
+Preprocess config:
+{
+    "target_sr": 16000,
+    "convert_to_mono": true,
+    "remove_dc": true,
+    "normalize_rms": true,
+    "target_dbfs": -20.0,
+    "peak_limit": 0.99,
+    "center_crop": false,
+    "crop_duration_sec": 2.0,
+    "pad_if_short": false,
+    "min_duration_sec": 0.5
+}
+
+Feature config:
+{
+    "n_mfcc": 30,
+    "n_fft": 1024,
+    "hop_length": 128,
+    "top_n_harmonics": 30,
+    "harmonic_min_freq": 50.0,
+    "harmonic_max_freq": null,
+    "entropy_bins": 64,
+    "zcr_percent": 20,
+    "energy_percent_steps": 10,
+    "include_mfcc_delta": true,
+    "include_glottal_features": true,
+    "glottal_f0_min": 75.0,
+    "glottal_f0_max": 600.0,
+    "glottal_pitch_time_step": 0.01
+}
