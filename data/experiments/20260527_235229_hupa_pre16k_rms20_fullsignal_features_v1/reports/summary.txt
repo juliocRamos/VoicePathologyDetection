@@ -3,7 +3,7 @@ HUPA Experiment Summary
 
 Experiment name: pre16k_rms20_fullsignal_features_v1
 Dataset root: /mnt/d/masters_degree/datasets/hupa/BDAtos HUPA Segmentada
-Output root: /home/jcesram/PycharmProjects/VoicePathology/data/experiments/20260526_233955_hupa_pre16k_rms20_fullsignal_features_v1
+Output root: /home/jcesram/PycharmProjects/VoicePathologyDetection/data/experiments/20260527_235229_hupa_pre16k_rms20_fullsignal_features_v1
 
 Manifest
 --------
@@ -70,7 +70,7 @@ Feature config:
     "zcr_percent": 20,
     "energy_percent_steps": 10,
     "include_mfcc_delta": true,
-    "include_glottal_features": true,
+    "include_glottal_features": false,
     "glottal_f0_min": 75.0,
     "glottal_f0_max": 600.0,
     "glottal_pitch_time_step": 0.01

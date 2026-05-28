@@ -10,9 +10,12 @@ from classes.audio_sample.audio_loader.preprocessing.audio_preprocessor import A
 from classes.audio_sample.audio_loader.preprocessing.audio_preprocess_config import AudioPreprocessConfig
 from classes.audio_sample.audio_loader.profilers.ProcessedAudioProfiler import ProcessedAudioProfiler
 from classes.dataset.adapters.hupa_adapter import HUPADatasetAdapter
+from classes.experiment.runners.model_training_runner import ModelTrainingRunner
 from classes.experiment.training.training_config import TrainingConfig
+from classes.experiment.training.training_plan import TrainingPlan
 from classes.plot.dataset_visualizer import DatasetVisualizer
 from classes.experiment.path_manager.experiment_paths import ExperimentPaths
+from classes.plot.training_metrics_visualizer import TrainingMetricsVisualizer
 from classes.vpd.feature_extraction_runner import FeatureExtractionRunner
 from classes.vpd.vpd_feature_extractor import VPDFeatureExtractor
 
@@ -48,7 +51,8 @@ class HUPAExperimentRunner:
         self.generate_plots(manifest)
 
         if self.feature_config is not None:
-            self.extract_features(manifest)
+            features_df = self.extract_features(manifest)
+            self.train_models(features_df)
 
         self.write_summary(manifest)
 
@@ -67,8 +71,7 @@ class HUPAExperimentRunner:
             json.dump(config_data, f, indent=4, ensure_ascii=False)
 
     def build_manifest(self) -> pd.DataFrame:
-        print("\n[1/4] Building HUPA manifest...")
-
+        print("\n[1/5] Building HUPA manifest...")
 
         adapter = HUPADatasetAdapter(
             root_dir=self.dataset_root,
@@ -88,7 +91,7 @@ class HUPAExperimentRunner:
 
 
     def profile_preprocessing(self, manifest: pd.DataFrame) -> pd.DataFrame:
-        print("\n[2/4] Evaluating preprocessing...")
+        print("\n[2/5] Evaluating preprocessing...")
 
         preprocessor = AudioPreprocessor(config=self.preprocess_config)
         profiler = ProcessedAudioProfiler(preprocessor)
@@ -123,7 +126,7 @@ class HUPAExperimentRunner:
         return profile
 
     def generate_plots(self, manifest: pd.DataFrame) -> None:
-        print("\n[3/4] Generating plots...")
+        print("\n[3/5] Generating plots...")
 
         plot_dir = self.paths.figures_dir / "hupa_manifest"
 
@@ -135,7 +138,7 @@ class HUPAExperimentRunner:
         print("\nGenerated plots saved in:\n", plot_dir)
 
     def extract_features(self, manifest: pd.DataFrame) -> pd.DataFrame:
-        print("\n[4/4] Extracting features...")
+        print("\n[4/5] Extracting features...")
 
         preprocessor = AudioPreprocessor(config=self.preprocess_config)
 
@@ -204,26 +207,57 @@ class HUPAExperimentRunner:
         training_config = TrainingConfig(
             label_col="label",
             positive_label="pathological",
-            test_size=0.15,
-            validation_size=0.15,
+            test_size=0.20,
             random_state=42,
-            balance_train=False
+            cv_folds=5,
+            scoring="f1",
+            n_jobs=-1,
+            save_models=True,
+            save_predictions=True,
+            save_cv_results=True,
+        )
+
+        feature_scenarios = TrainingPlan.default_feature_scenarios()
+
+        model_specs = TrainingPlan.default_model_specs(
+            random_state=training_config.random_state,
         )
 
         training_runner = ModelTrainingRunner(
             features_df=features_df,
-            output_dif=self.paths.root_dir / "training",
-            config=training_config
+            output_dir=self.paths.root_dir / "training",
+            config=training_config,
+            feature_scenarios=feature_scenarios,
+            model_specs=model_specs,
         )
 
-        metrics_df = training_runner.run_all()
+        metrics_df = training_runner.run()
 
-        print("\nFinal metrics:")
-        print(
-            metrics_df.sort_values(
-                by=["f1", "auc", "accuracy"],
-                ascending=False
+        print("\nBest results:")
+        sort_cols = [
+            col for col in ["f1", "auc", "accuracy"]
+            if col in metrics_df.columns
+        ]
+
+        if sort_cols:
+            print(
+                metrics_df.sort_values(
+                    by=sort_cols,
+                    ascending=False,
+                ).head(10)
             )
+        else:
+            print(metrics_df.head(10))
+
+
+        visualizer = TrainingMetricsVisualizer(
+            metrics_df=metrics_df,
+            predictions_dir=self.paths.root_dir / "training" /"predictions",
+            output_dir=self.paths.root_dir / "training" / "figures"
+        )
+
+        visualizer.generate_best_models_report(
+            best_metric="f1"
         )
 
         return metrics_df

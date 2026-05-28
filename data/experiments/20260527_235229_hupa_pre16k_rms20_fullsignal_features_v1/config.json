@@ -25,7 +25,7 @@
         "zcr_percent": 20,
         "energy_percent_steps": 10,
         "include_mfcc_delta": true,
-        "include_glottal_features": true,
+        "include_glottal_features": false,
         "glottal_f0_min": 75.0,
         "glottal_f0_max": 600.0,
         "glottal_pitch_time_step": 0.01
