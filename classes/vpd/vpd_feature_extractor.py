@@ -2,7 +2,7 @@ from typing import Any
 
 import numpy as np
 
-from classes.vpd.features.energy_features import get_energy_area
+from classes.vpd.features.energy_features import get_energy_area_A3
 from classes.vpd.features.entropy_features import get_entropy_C2
 from classes.vpd.features.harmonic_features import find_harmonics, get_top_n_harmonics
 from classes.vpd.features.mfcc_features import mfcc_features
@@ -82,7 +82,7 @@ class VPDFeatureExtractor:
         return features
 
     def _extract_energy_area(self, y: np.ndarray) -> dict[str, float]:
-        values = get_energy_area(
+        values = get_energy_area_A3(
             y,
             percent_step=self.config.energy_percent_steps
         )

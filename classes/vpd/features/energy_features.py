@@ -1,7 +1,7 @@
 import numpy as np
 
 
-def get_energy_area(
+def get_energy_area_A3(
     input_vector: np.ndarray,
     percent_step: int = 10,
 ) -> np.ndarray:

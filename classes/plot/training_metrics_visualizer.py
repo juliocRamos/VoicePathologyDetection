@@ -38,6 +38,33 @@ class TrainingMetricsVisualizer:
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
+
+    @staticmethod
+    def _add_bar_labels(ax, fmt: str = "{:.3f}") -> None:
+        for container in ax.containers:
+            ax.bar_label(
+                container,
+                labels=[
+                    fmt.format(value.get_height())
+                    for value in container
+                ],
+                padding=3,
+                fontsize=9,
+            )
+
+    @staticmethod
+    def _add_horizontal_bar_labels(ax, fmt: str = "{:.3f}") -> None:
+        for container in ax.containers:
+            ax.bar_label(
+                container,
+                labels=[
+                    fmt.format(value.get_width())
+                    for value in container
+                ],
+                padding=3,
+                fontsize=9,
+            )
+
     def generate_best_models_report(
         self,
         best_metric: str = "f1",
@@ -124,25 +151,28 @@ class TrainingMetricsVisualizer:
         x = np.arange(len(metric_cols))
         width = 0.8 / len(best_models_df)
 
-        plt.figure(figsize=(12, 6))
+        fig, ax = plt.subplots(figsize=(12, 6))
 
         for i, (_, row) in enumerate(best_models_df.iterrows()):
             values = row[metric_cols].astype(float).to_numpy()
             offset = (i - (len(best_models_df) - 1) / 2) * width
 
-            plt.bar(
+            ax.bar(
                 x + offset,
                 values,
                 width,
                 label=labels[i],
             )
 
-        plt.xticks(x, metric_cols, rotation=30, ha="right")
-        plt.ylim(0.0, 1.05)
-        plt.ylabel("Score")
-        plt.title("Best SVM and MLP models comparison")
-        plt.legend()
-        plt.grid(axis="y", alpha=0.3)
+        ax.set_xticks(x)
+        ax.set_xticklabels(metric_cols, rotation=30, ha="right")
+        ax.set_ylim(0.0, 1.12)
+        ax.set_ylabel("Valor da métrica")
+        ax.set_title("Comparação entre os melhores modelos SVM e MLP")
+        ax.legend()
+        ax.grid(axis="y", alpha=0.3)
+
+        self._add_bar_labels(ax, fmt="{:.3f}")
 
         self._save(filename)
 
@@ -170,16 +200,19 @@ class TrainingMetricsVisualizer:
             ascending=False,
         ).head(top_n)
 
-        plt.figure(figsize=(12, 7))
-        plt.barh(
+        fig, ax = plt.subplots(figsize=(12, 7))
+
+        ax.barh(
             top_df["model_label"][::-1],
             top_df[best_metric][::-1],
         )
 
-        plt.xlim(0.0, 1.05)
-        plt.xlabel(best_metric)
-        plt.title(f"Top {top_n} modelos por {best_metric}")
-        plt.grid(axis="x", alpha=0.3)
+        ax.set_xlim(0.0, 1.12)
+        ax.set_xlabel(best_metric)
+        ax.set_title(f"Top {top_n} modelos por {best_metric}")
+        ax.grid(axis="x", alpha=0.3)
+
+        self._add_horizontal_bar_labels(ax, fmt="{:.3f}")
 
         self._save(filename)
 
@@ -229,9 +262,14 @@ class TrainingMetricsVisualizer:
         )
 
         fig, ax = plt.subplots(figsize=(6, 5))
-        display.plot(ax=ax, values_format="d")
 
-        ax.set_title(f"Confusion Matrix\n{model} | {scenario}")
+        display.plot(
+            ax=ax,
+            values_format="d",
+            colorbar=False,
+        )
+
+        ax.set_title(f"Matriz de confusão\n{model} | {scenario}")
 
         self._save(filename)
 
@@ -240,7 +278,7 @@ class TrainingMetricsVisualizer:
         best_models_df: pd.DataFrame,
         filename: str,
     ) -> None:
-        plt.figure(figsize=(7, 6))
+        fig, ax = plt.subplots(figsize=(7, 6))
 
         plotted_any = False
 
@@ -257,7 +295,7 @@ class TrainingMetricsVisualizer:
                 continue
 
             if "y_score" not in predictions_df.columns:
-                print(f"[WARNING] y_score ausente para {scenario} | {model}")
+                print(f"[WARNING] missing y_score for {scenario} | {model}")
                 continue
 
             y_true = predictions_df["y_true"].to_numpy()
@@ -269,7 +307,7 @@ class TrainingMetricsVisualizer:
             fpr, tpr, _ = roc_curve(y_true, y_score)
             roc_auc = auc(fpr, tpr)
 
-            plt.plot(
+            ax.plot(
                 fpr,
                 tpr,
                 label=f"{model} | {scenario} | AUC={roc_auc:.3f}",
@@ -282,13 +320,13 @@ class TrainingMetricsVisualizer:
             plt.close()
             return
 
-        plt.plot([0, 1], [0, 1], linestyle="--", label="Random")
+        ax.plot([0, 1], [0, 1], linestyle="--", label="Random")
 
-        plt.xlabel("False Positive Rate")
-        plt.ylabel("True Positive Rate")
-        plt.title("ROC curve of best SVM and MLP models")
-        plt.legend()
-        plt.grid(alpha=0.3)
+        ax.set_xlabel("Taxa de falsos positivos (FPR)")
+        ax.set_ylabel("Taxa de verdadeiros positivos (TPR)")
+        ax.set_title("Curvas ROC dos melhores modelos SVM e MLP")
+        ax.legend(loc="lower right")
+        ax.grid(alpha=0.3)
 
         self._save(filename)
 
