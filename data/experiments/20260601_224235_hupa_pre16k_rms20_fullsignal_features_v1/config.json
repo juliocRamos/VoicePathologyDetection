@@ -1,0 +1,33 @@
+{
+    "dataset_name": "HUPA",
+    "dataset_root": "/mnt/d/masters_degree/datasets/hupa/BDAtos HUPA Segmentada",
+    "experiment_name": "pre16k_rms20_fullsignal_features_v1",
+    "preprocess_config": {
+        "target_sr": 16000,
+        "convert_to_mono": true,
+        "remove_dc": true,
+        "normalize_rms": true,
+        "target_dbfs": -20.0,
+        "peak_limit": 0.99,
+        "center_crop": false,
+        "crop_duration_sec": 2.0,
+        "pad_if_short": false,
+        "min_duration_sec": 0.5
+    },
+    "feature_config": {
+        "n_mfcc": 30,
+        "n_fft": 1024,
+        "hop_length": 128,
+        "top_n_harmonics": 30,
+        "harmonic_min_freq": 50.0,
+        "harmonic_max_freq": null,
+        "entropy_bins": 64,
+        "zcr_percent": 20,
+        "energy_percent_steps": 10,
+        "include_mfcc_delta": true,
+        "include_glottal_features": false,
+        "glottal_f0_min": 75.0,
+        "glottal_f0_max": 600.0,
+        "glottal_pitch_time_step": 0.01
+    }
+}

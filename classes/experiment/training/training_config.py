@@ -1,18 +1,20 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
+
 
 @dataclass
 class TrainingConfig:
     label_col: str = "label"
     positive_label: str = "pathological"
 
-    test_size: float = 0.15
-    validation_size: float = 0.15
+    test_size: float = 0.20
     random_state: int = 42
 
-    balance_train: bool = False
+    cv_folds: int = 5
+    scoring: str = "f1"
+    n_jobs: int = -1
 
-    svm_c_values: tuple[int, ...] = (128, 64)
-    mlp_alpha: float = 0.0001
-    mlp_lr_init: float = 0.001
-    mlp_max_iter: int = 500
-    mlp_early_stoping:bool = True
+    save_models: bool = True
+    save_predictions: bool = True
+    save_cv_results: bool = True
