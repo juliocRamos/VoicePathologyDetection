@@ -1,6 +1,7 @@
 from pathlib import Path
 import re
 import unicodedata
+
 import pandas as pd
 import soundfile as sf
 
@@ -16,15 +17,21 @@ def normalize_text(value) -> str:
     text = "".join(ch for ch in text if not unicodedata.combining(ch))
     text = re.sub(r"[^a-z0-9]+", "_", text)
     text = re.sub(r"_+", "_", text).strip("_")
+
     return text
 
+
 def normalize_filename_key(filename: str) -> str:
+    if pd.isna(filename):
+        return ""
+
     return normalize_text(Path(str(filename)).stem)
 
 
 class HUPADatasetAdapter(DatasetAdapter):
     def __init__(self, root_dir, metadata_filename="HUPA segmentada.xls"):
         super().__init__(root_dir)
+
         self.root_dir = Path(root_dir)
         self.metadata_path = self.root_dir / metadata_filename
 
@@ -46,9 +53,12 @@ class HUPADatasetAdapter(DatasetAdapter):
                 channels = None
 
             file_key = normalize_filename_key(wav_path.name)
+            label = self._infer_label_from_relative_path(relative_path)
+
+            sample_id = self._build_sample_id(relative_path)
 
             records.append({
-                "sample_id": f"hupa_{file_key}",
+                "sample_id": sample_id,
                 "base": "HUPA",
                 "filepath": str(wav_path),
                 "relative_path": str(relative_path),
@@ -56,6 +66,7 @@ class HUPADatasetAdapter(DatasetAdapter):
                 "file_stem": wav_path.stem,
                 "file_key": file_key,
                 "folder": folder,
+                "label": label,
                 "vowel": "a",
                 "pitch": None,
                 "samplerate": samplerate,
@@ -63,13 +74,22 @@ class HUPADatasetAdapter(DatasetAdapter):
                 "channels": channels,
             })
 
-        return pd.DataFrame(records)
+        audio_df = pd.DataFrame(records)
+
+        if audio_df["sample_id"].duplicated().any():
+            duplicated = audio_df[audio_df["sample_id"].duplicated(keep=False)]
+            raise ValueError(
+                "Duplicated sample_id values found in audio index:\n"
+                f"{duplicated[['sample_id', 'relative_path']].head(30)}"
+            )
+
+        return audio_df
 
     def load_metadata_sheet(self, sheet_name: str, label: str) -> pd.DataFrame:
         df = pd.read_excel(
             self.metadata_path,
             sheet_name=sheet_name,
-            header=1
+            header=1,
         )
 
         df = df.dropna(how="all").copy()
@@ -139,25 +159,29 @@ class HUPADatasetAdapter(DatasetAdapter):
 
         df["metadata_file_key"] = df["metadata_filename"].apply(normalize_filename_key)
         df["label"] = label
+        df["metadata_sheet"] = sheet_name
 
         return df
 
     def load_metadata(self) -> pd.DataFrame:
         if not self.metadata_path.exists():
-            raise FileNotFoundError(f"Arquivo de metadados não encontrado: {self.metadata_path}")
+            raise FileNotFoundError(f"Metadata file not found: {self.metadata_path}")
 
         normal_df = self.load_metadata_sheet("Normales", label="healthy")
         pathological_df = self.load_metadata_sheet("Patológicos", label="pathological")
 
         metadata_df = pd.concat(
             [normal_df, pathological_df],
-            ignore_index=True
+            ignore_index=True,
         )
 
-        metadata_df["sex"] = metadata_df["sex"].replace({
-            "H": "male",
-            "M": "female"
-        })
+        if "sex" in metadata_df.columns:
+            metadata_df["sex"] = metadata_df["sex"].replace({
+                "H": "male",
+                "M": "female",
+                "h": "male",
+                "m": "female",
+            })
 
         return metadata_df
 
@@ -165,23 +189,42 @@ class HUPADatasetAdapter(DatasetAdapter):
         audio_df = self.build_audio_index()
         metadata_df = self.load_metadata()
 
-        manifest = audio_df.merge(
-            metadata_df,
-            left_on="file_key",
-            right_on="metadata_file_key",
-            how="left",
-            suffixes=("", "_metadata")
+        self._print_key_diagnostics(audio_df, metadata_df)
+
+        self._validate_composite_keys(
+            audio_df=audio_df,
+            metadata_df=metadata_df,
         )
 
-        manifest["speaker_id"] = manifest["file_key"]
+        manifest = audio_df.merge(
+            metadata_df,
+            left_on=["file_key", "label"],
+            right_on=["metadata_file_key", "label"],
+            how="left",
+            suffixes=("", "_metadata"),
+            validate="one_to_one",
+        )
 
-        # Como toda a HUPA segmentada aqui é vogal /a/
+        if len(manifest) != len(audio_df):
+            raise ValueError(
+                f"Manifest size mismatch. "
+                f"audio_df={len(audio_df)}, manifest={len(manifest)}"
+            )
+
+        manifest["speaker_id"] = manifest["sample_id"]
+
+        # Toda a HUPA segmentada utilizada neste experimento corresponde à vogal /a/
         manifest["vowel"] = "a"
 
         return manifest
 
     def validate_manifest(self, manifest: pd.DataFrame) -> None:
         print("Total indexed files:", len(manifest))
+
+        if "sample_id" in manifest.columns:
+            print("Unique sample_id:", manifest["sample_id"].nunique())
+            print("Duplicated sample_id:", manifest["sample_id"].duplicated().sum())
+
         print("With metadata:", manifest["metadata_file_key"].notna().sum())
         print("Without metadata:", manifest["metadata_file_key"].isna().sum())
 
@@ -198,4 +241,144 @@ class HUPADatasetAdapter(DatasetAdapter):
 
         if len(unmatched) > 0:
             print("\nFiles without metadata:")
-            print(unmatched[["relative_path", "filename", "file_key"]].head(30))
+            print(unmatched[["relative_path", "filename", "file_key", "label"]].head(30))
+
+    @staticmethod
+    def _build_sample_id(relative_path: Path) -> str:
+        normalized_path = normalize_text(str(relative_path.with_suffix("")))
+        return f"hupa_{normalized_path}"
+
+    @staticmethod
+    def _infer_label_from_relative_path(relative_path: Path) -> str | None:
+        path_parts = [
+            normalize_text(part)
+            for part in relative_path.parts
+        ]
+
+        path_text = "_".join(path_parts)
+
+        pathological_markers = {
+            "pathol",
+            "pathological",
+            "patologico",
+            "patologicos",
+            "patologica",
+            "patologicas",
+            "patolog",
+        }
+
+        healthy_markers = {
+            "normal",
+            "normales",
+            "healthy",
+        }
+
+        if any(marker in path_text for marker in pathological_markers):
+            return "pathological"
+
+        if any(marker in path_text for marker in healthy_markers):
+            return "healthy"
+
+        return None
+
+    @staticmethod
+    def _print_key_diagnostics(
+        audio_df: pd.DataFrame,
+        metadata_df: pd.DataFrame,
+    ) -> None:
+        print("\nAudio index shape:", audio_df.shape)
+        print("Metadata shape:", metadata_df.shape)
+
+        print("\nAudio unique file_key:", audio_df["file_key"].nunique())
+        print("Metadata unique metadata_file_key:", metadata_df["metadata_file_key"].nunique())
+
+        print("\nAudio duplicated file_key:", audio_df["file_key"].duplicated().sum())
+        print("Metadata duplicated metadata_file_key:", metadata_df["metadata_file_key"].duplicated().sum())
+
+        audio_composite_dups = audio_df.duplicated(
+            subset=["file_key", "label"],
+            keep=False,
+        )
+
+        metadata_composite_dups = metadata_df.duplicated(
+            subset=["metadata_file_key", "label"],
+            keep=False,
+        )
+
+        print("\nAudio duplicated composite keys [file_key, label]:", audio_composite_dups.sum())
+        print("Metadata duplicated composite keys [metadata_file_key, label]:", metadata_composite_dups.sum())
+
+        if audio_composite_dups.any():
+            print("\nDuplicated audio composite keys:")
+            print(
+                audio_df.loc[
+                    audio_composite_dups,
+                    ["file_key", "label", "relative_path", "filename"],
+                ]
+                .sort_values(["file_key", "label"])
+                .head(50)
+            )
+
+        if metadata_composite_dups.any():
+            print("\nDuplicated metadata composite keys:")
+            cols = [
+                "metadata_file_key",
+                "label",
+                "metadata_filename",
+                "sex",
+                "age",
+                "pathology",
+            ]
+            existing_cols = [col for col in cols if col in metadata_df.columns]
+
+            print(
+                metadata_df.loc[metadata_composite_dups, existing_cols]
+                .sort_values(["metadata_file_key", "label"])
+                .head(50)
+            )
+
+    @staticmethod
+    def _validate_composite_keys(
+        audio_df: pd.DataFrame,
+        metadata_df: pd.DataFrame,
+    ) -> None:
+        missing_audio_labels = audio_df["label"].isna().sum()
+
+        if missing_audio_labels > 0:
+            missing = audio_df[audio_df["label"].isna()]
+            raise ValueError(
+                "Some audio files have no inferred label from path:\n"
+                f"{missing[['relative_path', 'filename', 'file_key']].head(30)}"
+            )
+
+        audio_dups = audio_df[
+            audio_df.duplicated(subset=["file_key", "label"], keep=False)
+        ].sort_values(["file_key", "label"])
+
+        metadata_dups = metadata_df[
+            metadata_df.duplicated(subset=["metadata_file_key", "label"], keep=False)
+        ].sort_values(["metadata_file_key", "label"])
+
+        if not audio_dups.empty:
+            raise ValueError(
+                "Duplicated composite keys found in audio_df. "
+                "The pair [file_key, label] is still ambiguous:\n"
+                f"{audio_dups[['file_key', 'label', 'relative_path', 'filename']].head(50)}"
+            )
+
+        if not metadata_dups.empty:
+            cols = [
+                "metadata_file_key",
+                "label",
+                "metadata_filename",
+                "sex",
+                "age",
+                "pathology",
+            ]
+            existing_cols = [col for col in cols if col in metadata_df.columns]
+
+            raise ValueError(
+                "Duplicated composite keys found in metadata_df. "
+                "The pair [metadata_file_key, label] is still ambiguous:\n"
+                f"{metadata_dups[existing_cols].head(50)}"
+            )
