@@ -1,6 +1,5 @@
 import pandas as pd
 
-from classes.vpd.vpd_feature_config import VPDFeatureConfig
 from classes.vpd.vpd_feature_extractor import VPDFeatureExtractor
 
 
@@ -10,16 +9,15 @@ class FeatureExtractionRunner:
         self.extractor = extractor
 
     def extract_from_manifest(
-            self,
-            manifest: pd.DataFrame,
-            max_samples: int | None = None
+        self,
+        manifest: pd.DataFrame,
+        max_samples: int | None = None,
     ) -> pd.DataFrame:
 
-        rows = manifest
+        rows = manifest.copy()
 
         if max_samples is not None:
             rows = rows.head(max_samples)
-
 
         records = []
 
@@ -30,7 +28,6 @@ class FeatureExtractionRunner:
 
                 record["status"] = "ok"
                 record["error"] = None
-                records.append(record)
 
             except Exception as exc:
                 record = {
@@ -50,4 +47,26 @@ class FeatureExtractionRunner:
 
             records.append(record)
 
-        return pd.DataFrame(records)
+        features_df = pd.DataFrame(records)
+
+        if len(features_df) != len(rows):
+            raise ValueError(
+                f"Feature extraction size mismatch: "
+                f"manifest={len(rows)}, features_df={len(features_df)}"
+            )
+
+        if "sample_id" in features_df.columns:
+            duplicated = features_df["sample_id"].duplicated().sum()
+
+            if duplicated > 0:
+                duplicated_rows = features_df[
+                    features_df["sample_id"].duplicated(keep=False)
+                ]
+
+                raise ValueError(
+                    f"Duplicated sample_id values found after feature extraction: "
+                    f"{duplicated}\n"
+                    f"{duplicated_rows[['sample_id', 'status', 'error']].head(30)}"
+                )
+
+        return features_df

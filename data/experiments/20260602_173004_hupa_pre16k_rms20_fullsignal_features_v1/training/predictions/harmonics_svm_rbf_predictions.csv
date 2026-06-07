@@ -1,0 +1,89 @@
+vowel,speaker_id,duration,sr,sex,sample_id,pathology_code,label,pitch,status,error,pathology,age,base,y_true,y_pred,y_score
+a,hupa_pathol_lc4,3.0,16000,female,hupa_pathol_lc4,1.2.2.4.,pathological,,ok,,Laringitis crónica hiperplásica,32.0,HUPA,1,0,-0.5030598781350317
+a,hupa_normal_fffa,2.9800625,16000,female,hupa_normal_fffa,0,healthy,,ok,,Laringe Normal. No Patológica,63.0,HUPA,0,0,-0.703430067878544
+a,hupa_pathol_pol,1.5225,16000,male,hupa_pathol_pol,2.2.1.,pathological,,ok,,Pólipo pediculado,28.0,HUPA,1,1,0.1154984900976952
+a,hupa_pathol_lnta,2.9800625,16000,male,hupa_pathol_lnta,2.3.2.,pathological,,ok,,Edema de Reinke bilateral,65.0,HUPA,1,1,0.5149389133399156
+a,hupa_normal_eyma,2.9800625,16000,female,hupa_normal_eyma,0,healthy,,ok,,Laringe Normal. No Patológica,40.0,HUPA,0,0,-0.8166103126714819
+a,hupa_pathol_mjhff,2.9800625,16000,female,hupa_pathol_mjhff,1.1.4.,pathological,,ok,,Quiste epidermoide,14.0,HUPA,1,1,0.5122884544489378
+a,hupa_pathol_joma,2.557625,16000,female,hupa_pathol_joma,2.3.2.,pathological,,ok,,Edema de Reinke bilateral,45.0,HUPA,1,1,0.19196592755762437
+a,hupa_normal_clqa,2.9800625,16000,female,hupa_normal_clqa,0,healthy,,ok,,Laringe Normal. No Patológica,70.0,HUPA,0,1,0.003752250032364457
+a,hupa_pathol_ssc,3.0,16000,female,hupa_pathol_ssc,2.1.2.,pathological,,ok,,Nódulo bilateral,23.0,HUPA,1,1,0.4792094480747289
+a,hupa_normal_irdaa,2.9800625,16000,female,hupa_normal_irdaa,0,healthy,,ok,,Laringe Normal. No Patológica,54.0,HUPA,0,0,-0.48159056256870225
+a,hupa_pathol_nod2,3.0520625,16000,female,hupa_pathol_nod2,2.1.2.,pathological,,ok,,Nódulo bilateral,23.0,HUPA,1,1,0.8429901831996782
+a,hupa_normal_cbca,2.9800625,16000,female,hupa_normal_cbca,0,healthy,,ok,,Laringe Normal. No Patológica,28.0,HUPA,0,0,-0.6246702989337349
+a,hupa_normal_jaaa,2.9800625,16000,male,hupa_normal_jaaa,0,healthy,,ok,,Laringe Normal. No Patológica,21.0,HUPA,0,0,-0.24642261620980677
+a,hupa_pathol_polipo13,2.9800625,16000,male,hupa_pathol_polipo13,2.2.1.,pathological,,ok,,Pólipo pediculado,51.0,HUPA,1,0,-0.7968764979881806
+a,hupa_pathol_polipo,2.9800625,16000,male,hupa_pathol_polipo,2.2.1.,pathological,,ok,,Pólipo pediculado,44.0,HUPA,1,0,-0.4270257545974737
+a,hupa_pathol_pqparcvd,3.0,16000,male,hupa_pathol_pqparcvd,1.2.5.1.3.,pathological,,ok,,Parálisis periféricas: Recurrente derecho,40.0,HUPA,1,1,1.3369346113014053
+a,hupa_normal_ramona,2.9800625,16000,male,hupa_normal_ramona,0,healthy,,ok,,Laringe Normal. No Patológica,31.0,HUPA,0,0,-0.03353787853353718
+a,hupa_normal_njpp,2.5689375,16000,female,hupa_normal_njpp,0,healthy,,ok,,Laringe Normal. No Patológica,46.0,HUPA,0,0,-0.28701780390276643
+a,hupa_normal_aigca,2.9800625,16000,female,hupa_normal_aigca,0,healthy,,ok,,Laringe Normal. No Patológica,27.0,HUPA,0,0,-0.9716200321116786
+a,hupa_normal_eppa,2.9800625,16000,female,hupa_normal_eppa,0,healthy,,ok,,Laringe Normal. No Patológica,31.0,HUPA,0,0,-0.3103315515726208
+a,hupa_normal_bpca,2.5986875,16000,female,hupa_normal_bpca,0,healthy,,ok,,Laringe Normal. No Patológica,18.0,HUPA,0,0,-0.3364217863115584
+a,hupa_normal_jgaa,2.9800625,16000,female,hupa_normal_jgaa,0,healthy,,ok,,Laringe Normal. No Patológica,34.0,HUPA,0,1,0.1678610664675788
+a,hupa_normal_bmea,2.9800625,16000,female,hupa_normal_bmea,0,healthy,,ok,,Laringe Normal. No Patológica,22.0,HUPA,0,0,-1.800023993083198
+a,hupa_normal_hba,2.9800625,16000,female,hupa_normal_hba,0,healthy,,ok,,Laringe Normal. No Patológica,22.0,HUPA,0,1,0.8502449212115637
+a,hupa_normal_ega,2.9800625,16000,female,hupa_normal_ega,0,healthy,,ok,,Laringe Normal. No Patológica,24.0,HUPA,0,0,-1.3657236838346276
+a,hupa_pathol_araa,2.9800625,16000,female,hupa_pathol_araa,1.2.5.2.,pathological,,ok,,Lesión de neurona motora superior,63.0,HUPA,1,1,0.8129743061337005
+a,hupa_normal_egla,2.9800625,16000,male,hupa_normal_egla,0,healthy,,ok,,Laringe Normal. No Patológica,40.0,HUPA,0,0,-1.2957155869109638
+a,hupa_pathol_fgha,2.9800625,16000,male,hupa_pathol_fgha,2.3.2.,pathological,,ok,,Edema de Reinke bilateral,47.0,HUPA,1,0,-0.16394126309162532
+a,hupa_pathol_pqsucvd,2.9800625,16000,female,hupa_pathol_pqsucvd,1.1.3.2.,pathological,,ok,,Sulcus en estría,43.0,HUPA,1,1,0.4105345601010798
+a,hupa_pathol_arca,2.9800625,16000,female,hupa_pathol_arca,1.1.4.,pathological,,ok,,Quiste epidermoide,46.0,HUPA,1,1,0.4698766863059652
+a,hupa_normal_jqma,2.9800625,16000,female,hupa_normal_jqma,0,healthy,,ok,,Laringe Normal. No Patológica,43.0,HUPA,0,0,-0.5585578730196312
+a,hupa_pathol_arla,2.9800625,16000,female,hupa_pathol_arla,1.1.3.2.,pathological,,ok,,Sulcus en estría,40.0,HUPA,1,0,-0.8614680193505808
+a,hupa_normal_loma,2.9800625,16000,female,hupa_normal_loma,0,healthy,,ok,,Laringe Normal. No Patológica,24.0,HUPA,0,0,-1.265603146490063
+a,hupa_pathol_polipo10,3.0,16000,male,hupa_pathol_polipo10,2.2.1.,pathological,,ok,,Pólipo pediculado,34.0,HUPA,1,1,1.5841336130251544
+a,hupa_normal_lffa,2.9800625,16000,female,hupa_normal_lffa,0,healthy,,ok,,Laringe Normal. No Patológica,39.0,HUPA,0,1,0.1935157985387353
+a,hupa_pathol_mtfa2,2.9411875,16000,female,hupa_pathol_mtfa2,2.2.1.,pathological,,ok,,Pólipo pediculado,51.0,HUPA,1,1,1.8872891685694733
+a,hupa_pathol_ejcalahi,2.9800625,16000,male,hupa_pathol_ejcalahi,1.2.2.4.,pathological,,ok,,Laringitis crónica hiperplásica,58.0,HUPA,1,1,1.0003259657748276
+a,hupa_normal_jnra,2.9800625,16000,male,hupa_normal_jnra,0,healthy,,ok,,Laringe Normal. No Patológica,78.0,HUPA,0,0,-0.5264645166110997
+a,hupa_normal_ifga,2.9800625,16000,female,hupa_normal_ifga,0,healthy,,ok,,Laringe Normal. No Patológica,53.0,HUPA,0,1,0.053282821949212855
+a,hupa_pathol_ecaa,2.9800625,16000,female,hupa_pathol_ecaa,1.1.4.,pathological,,ok,,Quiste epidermoide,28.0,HUPA,1,1,0.3973530810716143
+a,hupa_normal_egoa,2.9800625,16000,male,hupa_normal_egoa,0,healthy,,ok,,Laringe Normal. No Patológica,70.0,HUPA,0,1,0.5562892683996434
+a,hupa_normal_jlhsa,2.9800625,16000,male,hupa_normal_jlhsa,0,healthy,,ok,,Laringe Normal. No Patológica,59.0,HUPA,0,1,0.17210745285319193
+a,hupa_pathol_yfea,2.9800625,16000,female,hupa_pathol_yfea,2.1.2.,pathological,,ok,,Nódulo bilateral,30.0,HUPA,1,0,-1.1984134008780918
+a,hupa_pathol_quiste2,3.0,16000,female,hupa_pathol_quiste2,1.1.4.,pathological,,ok,,Quiste epidermoide,24.0,HUPA,1,0,-0.1975995297680544
+a,hupa_normal_caca,2.9800625,16000,female,hupa_normal_caca,0,healthy,,ok,,Laringe Normal. No Patológica,57.0,HUPA,0,1,0.28228793768835103
+a,hupa_normal_icma,2.9800625,16000,male,hupa_normal_icma,0,healthy,,ok,,Laringe Normal. No Patológica,51.0,HUPA,0,0,-1.7720852535214344
+a,hupa_pathol_edema1,3.0,16000,male,hupa_pathol_edema1,2.3.2.,pathological,,ok,,Edema de Reinke bilateral,50.0,HUPA,1,0,-0.07886371190555641
+a,hupa_normal_arpa,2.9800625,16000,male,hupa_normal_arpa,0,healthy,,ok,,Laringe Normal. No Patológica,21.0,HUPA,0,0,-0.8885383416749753
+a,hupa_normal_gnra,2.9800625,16000,male,hupa_normal_gnra,0,healthy,,ok,,Laringe Normal. No Patológica,65.0,HUPA,0,1,0.8766769242460185
+a,hupa_pathol_orensepr,3.0,16000,female,hupa_pathol_orensepr,1.1.3.2.,pathological,,ok,,Sulcus en estría,32.0,HUPA,1,0,-0.279267709322633
+a,hupa_normal_dja,2.9800625,16000,male,hupa_normal_dja,0,healthy,,ok,,Laringe Normal. No Patológica,22.0,HUPA,0,0,-1.3379313460325457
+a,hupa_pathol_sppv,2.437,16000,male,hupa_pathol_sppv,2.2.1.,pathological,,ok,,Pólipo pediculado,46.0,HUPA,1,1,1.2237887413330453
+a,hupa_pathol_thva,2.6065625,16000,male,hupa_pathol_thva,2.2.1.,pathological,,ok,,Pólipo pediculado,38.0,HUPA,1,0,-0.14146183520998595
+a,hupa_normal_ajha,2.9800625,16000,male,hupa_normal_ajha,0,healthy,,ok,,Laringe Normal. No Patológica,20.0,HUPA,0,0,-1.5261331263679463
+a,hupa_pathol_rbga,2.2095625,16000,female,hupa_pathol_rbga,1.1.4.,pathological,,ok,,Quiste epidermoide,26.0,HUPA,1,1,0.9120873467198051
+a,hupa_normal_jmga,2.9800625,16000,male,hupa_normal_jmga,0,healthy,,ok,,Laringe Normal. No Patológica,55.0,HUPA,0,0,-0.10568412940010208
+a,hupa_pathol_mhla,2.9800625,16000,female,hupa_pathol_mhla,1.1.4.,pathological,,ok,,Quiste epidermoide,58.0,HUPA,1,1,1.11109677440239
+a,hupa_normal_jgga,2.9800625,16000,male,hupa_normal_jgga,0,healthy,,ok,,Laringe Normal. No Patológica,20.0,HUPA,0,0,-0.3917131379346869
+a,hupa_pathol_edema3,2.9800625,16000,male,hupa_pathol_edema3,2.3.2.,pathological,,ok,,Edema de Reinke bilateral,50.0,HUPA,1,1,0.5149389133399156
+a,hupa_normal_cpca,2.9800625,16000,male,hupa_normal_cpca,0,healthy,,ok,,Laringe Normal. No Patológica,24.0,HUPA,0,0,-0.6926270094811258
+a,hupa_pathol_aasa,2.9800625,16000,male,hupa_pathol_aasa,1.2.2.4.,pathological,,ok,,Laringitis crónica hiperplásica,41.0,HUPA,1,0,-0.6478652224861773
+a,hupa_normal_jmhba,2.9800625,16000,male,hupa_normal_jmhba,0,healthy,,ok,,Laringe Normal. No Patológica,64.0,HUPA,0,1,0.30754514024781554
+a,hupa_pathol_sulc,3.0,16000,female,hupa_pathol_sulc,1.1.3.2.,pathological,,ok,,Sulcus en estría,38.0,HUPA,1,1,0.8523620234850449
+a,hupa_normal_eeha,2.7009375,16000,female,hupa_normal_eeha,0,healthy,,ok,,Laringe Normal. No Patológica,27.0,HUPA,0,0,-0.2715238579439141
+a,hupa_pathol_pqs1a,3.0,16000,female,hupa_pathol_pqs1a,1.1.3.2.,pathological,,ok,,Sulcus en estría,28.0,HUPA,1,1,1.0054707315263212
+a,hupa_pathol_polipo17,2.9800625,16000,female,hupa_pathol_polipo17,2.2.1.,pathological,,ok,,Pólipo pediculado,40.0,HUPA,1,1,0.4555116292432901
+a,hupa_normal_jcca,2.9800625,16000,female,hupa_normal_jcca,0,healthy,,ok,,Laringe Normal. No Patológica,63.0,HUPA,0,0,-0.6370332607131899
+a,hupa_normal_aaca,2.9800625,16000,male,hupa_normal_aaca,0,healthy,,ok,,Laringe Normal. No Patológica,67.0,HUPA,0,1,0.07057520125207517
+a,hupa_normal_bspa,2.9800625,16000,female,hupa_normal_bspa,0,healthy,,ok,,Laringe Normal. No Patológica,28.0,HUPA,0,1,0.58087649942678
+a,hupa_normal_afca,2.9800625,16000,female,hupa_normal_afca,0,healthy,,ok,,Laringe Normal. No Patológica,35.0,HUPA,0,0,-0.725295551083784
+a,hupa_pathol_subi,2.9800625,16000,female,hupa_pathol_subi,1.1.3.2.,pathological,,ok,,Sulcus en estría,22.0,HUPA,1,1,0.13434668663381466
+a,hupa_normal_dgma,2.9800625,16000,female,hupa_normal_dgma,0,healthy,,ok,,Laringe Normal. No Patológica,57.0,HUPA,0,0,-0.8387328637801885
+a,hupa_normal_dmpa,2.9800625,16000,female,hupa_normal_dmpa,0,healthy,,ok,,Laringe Normal. No Patológica,50.0,HUPA,0,1,0.925546323637995
+a,hupa_normal_cboa,2.9800625,16000,female,hupa_normal_cboa,0,healthy,,ok,,Laringe Normal. No Patológica,18.0,HUPA,0,0,-0.5703137664129555
+a,hupa_pathol_nod13,3.0,16000,female,hupa_pathol_nod13,2.1.2.,pathological,,ok,,Nódulo bilateral,22.0,HUPA,1,1,1.1518403220027036
+a,hupa_normal_ccopa,2.9800625,16000,male,hupa_normal_ccopa,0,healthy,,ok,,Laringe Normal. No Patológica,21.0,HUPA,0,0,-0.6416851841440603
+a,hupa_pathol_h106129,3.0,16000,female,hupa_pathol_h106129,3.1.2.1.,pathological,,ok,,Falta de cierre,20.0,HUPA,1,1,0.8783198442714344
+a,hupa_pathol_magmv,2.784,16000,female,hupa_pathol_magmv,2.3.2.,pathological,,ok,,Edema de Reinke bilateral,54.0,HUPA,1,1,1.006564344158982
+a,hupa_normal_fcspa,2.9800625,16000,male,hupa_normal_fcspa,0,healthy,,ok,,Laringe Normal. No Patológica,48.0,HUPA,0,0,-0.7992454797780046
+a,hupa_pathol_nod12,3.0,16000,female,hupa_pathol_nod12,2.1.2.,pathological,,ok,,Nódulo bilateral,20.0,HUPA,1,0,-0.9632804574519118
+a,hupa_normal_jgda,2.9800625,16000,female,hupa_normal_jgda,0,healthy,,ok,,Laringe Normal. No Patológica,36.0,HUPA,0,0,-0.9530718122633492
+a,hupa_normal_jjma,2.9800625,16000,male,hupa_normal_jjma,0,healthy,,ok,,Laringe Normal. No Patológica,26.0,HUPA,0,0,-0.7694979156402411
+a,hupa_normal_jgpa,2.9800625,16000,male,hupa_normal_jgpa,0,healthy,,ok,,Laringe Normal. No Patológica,54.0,HUPA,0,0,-0.03422442265446124
+a,hupa_normal_mhca,2.9800625,16000,female,hupa_normal_mhca,0,healthy,,ok,,Laringe Normal. No Patológica,25.0,HUPA,0,0,-0.9494561206632381
+a,hupa_pathol_mmo80399,2.7184375,16000,male,hupa_pathol_mmo80399,1.2.2.5.,pathological,,ok,,Laringitis crónica hiperplásica con leucoplasia,60.0,HUPA,1,1,1.323594535080477
+a,hupa_pathol_sulc4,3.0,16000,female,hupa_pathol_sulc4,1.1.3.2.,pathological,,ok,,Sulcus en estría,9.0,HUPA,1,1,1.0295147229208064
+a,hupa_pathol_jer,2.485,16000,female,hupa_pathol_jer,2.3.2.,pathological,,ok,,Edema de Reinke bilateral,,HUPA,1,1,1.8615715728721252
+a,hupa_normal_dvca,2.9800625,16000,female,hupa_normal_dvca,0,healthy,,ok,,Laringe Normal. No Patológica,18.0,HUPA,0,0,-0.3467488674477699
