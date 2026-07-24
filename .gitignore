@@ -217,5 +217,8 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-
+# pycharm metadata
 **/.idea/*
+
+# experiments folder
+data/experiments/**

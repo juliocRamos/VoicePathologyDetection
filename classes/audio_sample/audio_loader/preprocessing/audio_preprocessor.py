@@ -4,10 +4,11 @@ from typing import Any, Optional, cast, SupportsFloat, SupportsIndex
 
 import numpy as np
 import pandas as pd
-import soundfile as sf
 from math import gcd
 
 from scipy.signal import resample_poly
+
+from classes.audio_sample.audio_loader.audio_file_reader import AudioFileReader
 
 from classes.audio_sample.audio_loader.preprocessing.audio_preprocess_config import AudioPreprocessConfig
 from classes.audio_sample.audio_sample import AudioSample
@@ -16,21 +17,28 @@ FloatConvertible = str | bytes | bytearray | SupportsFloat | SupportsIndex
 
 
 class AudioPreprocessor:
-    def __init__(self, config: AudioPreprocessConfig):
+    def __init__(
+            self,
+            config: AudioPreprocessConfig,
+            audio_reader: AudioFileReader | None = None,
+    ):
         self.config = config
+        self.audio_reader = audio_reader or AudioFileReader()
 
-
-    def load_from_manifest_row(self, row: pd.Series) -> AudioSample:
+    def load_from_manifest_row(
+            self,
+            row: pd.Series,
+    ) -> AudioSample:
         filepath = Path(row["filepath"])
 
-        signal, sr = sf.read(filepath, dtype = "float32", always_2d=True)
+        loaded_audio = self.audio_reader.read(filepath)
 
         sample = AudioSample(
             sample_id=str(row["sample_id"]),
             base=str(row["base"]),
             filepath=filepath,
-            signal=np.asarray(signal, dtype=np.float32),
-            sr=int(sr),
+            signal=loaded_audio.signal,
+            sr=loaded_audio.sample_rate,
 
             label=self._get_optional(row, "label"),
             speaker_id=self._get_optional(row, "speaker_id"),
@@ -76,7 +84,8 @@ class AudioPreprocessor:
             )
 
         if self.config.min_duration_sec is not None:
-            duration = len(signal) / sr
+            duration = signal.shape[0] / sr
+
             if duration < self.config.min_duration_sec:
                 raise ValueError(
                     f"Sample {sample.sample_id} has too short duration "
@@ -106,10 +115,28 @@ class AudioPreprocessor:
 
     @staticmethod
     def to_mono(signal: np.ndarray) -> np.ndarray:
-        if signal.ndim == 1:
-            return signal
+        signal = np.asarray(signal)
 
-        return np.mean(signal, axis=1)
+        if signal.ndim == 1:
+            return signal.astype(np.float32, copy=False)
+
+        if signal.ndim != 2:
+            raise ValueError(
+                f"Unsupported audio shape: {signal.shape}. "
+                "Expected mono or multichannel signal."
+            )
+
+        if signal.shape[1] == 1:
+            return signal[:, 0].astype(
+                np.float32,
+                copy=False,
+            )
+
+        return np.mean(
+            signal,
+            axis=1,
+            dtype=np.float64,
+        ).astype(np.float32)
 
     @staticmethod
     def remove_dc(signal: np.ndarray) -> np.ndarray:
@@ -154,6 +181,11 @@ class AudioPreprocessor:
             duration_sec: float,
             pad_if_short: bool = False,
     ) -> np.ndarray:
+        if signal.ndim != 1:
+            raise ValueError(
+                "center_crop_or_pad expects a mono signal, "
+                f"but received shape={signal.shape}"
+            )
 
         target_len = int(duration_sec * sr)
         current_len = len(signal)
@@ -173,7 +205,11 @@ class AudioPreprocessor:
         pad_left = pad_total // 2
         pad_right = pad_total - pad_left
 
-        return np.pad(signal, (pad_left, pad_right), mode="constant")
+        return np.pad(
+            signal,
+            (pad_left, pad_right),
+            mode="constant",
+        )
 
     @staticmethod
     def _is_missing(value: Any) -> bool:
@@ -244,30 +280,3 @@ class AudioPreprocessor:
             return None
 
         return result
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

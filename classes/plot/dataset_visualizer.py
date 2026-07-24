@@ -221,7 +221,7 @@ class DatasetVisualizer:
         counts = counts.sort_values()
 
         ax = counts.plot(kind="barh", figsize=(10, 7))
-        ax.set_title(f"{top_n} condições clínicas mais frequentes na base HUPA")
+        ax.set_title(f"{top_n} condições clínicas mais frequentes na base de dados")
         ax.set_xlabel("Qtd. amostras")
         ax.set_ylabel("Patologia")
 
@@ -272,12 +272,105 @@ class DatasetVisualizer:
         self._save_or_show("grbas_by_class.png")
 
     def generate_basic_report(self) -> None:
-        self.plot_class_distribution()
-        self.plot_sex_distribution()
-        self.plot_class_by_gender()
-        self.plot_duration_distribution()
-        self.plot_duration_by_class()
-        self.plot_age_by_class()
-        self.plot_top_pathologies()
-        self.plot_age_vs_duration_by_class()
-        self.plot_grbas_by_class()
+        available_columns = set(self.manifest.columns)
+
+        plots = [
+            ({"label"}, self.plot_class_distribution),
+            ({"sex"}, self.plot_sex_distribution),
+            ({"sex", "label"}, self.plot_class_by_gender),
+            ({"duration"}, self.plot_duration_distribution),
+            ({"duration", "label"}, self.plot_duration_by_class),
+            ({"age", "label"}, self.plot_age_by_class),
+            ({"pathology"}, self.plot_top_pathologies),
+            ({"age", "duration", "label"}, self.plot_age_vs_duration_by_class),
+        ]
+
+        for required_cols, plot_func in plots:
+            if required_cols.issubset(available_columns):
+                plot_func()
+
+
+
+    # SVD specific visualizations.
+    def plot_vowel_condition_coverage(self) -> None:
+        required_cols = {"vowel", "condition"}
+
+        if not required_cols.issubset(self.manifest.columns):
+            raise ValueError("Columns 'vowel' and 'condition' are required.")
+
+        table = pd.crosstab(
+            self.manifest["vowel"],
+            self.manifest["condition"],
+            dropna=False
+        )
+
+        ax = table.plot(kind="bar", figsize=(10, 5))
+
+        ax.set_title("Cobertura por vogal e condição de emissão")
+        ax.set_xlabel("Vogal")
+        ax.set_ylabel("Qtd. amostras")
+        ax.legend(title="Condição", loc="upper right")
+
+        self._add_bar_labels(ax)
+
+        self._save_or_show("vowel_condition_coverage.png")
+
+    def plot_recordings_per_speaker(self) -> None:
+        if "speaker_id" not in self.manifest.columns:
+            raise ValueError("No speaker_id column found in manifest.")
+
+        df = self.manifest.dropna(subset=["speaker_id"]).copy()
+
+        counts = (
+            df[["speaker_id", "recording_id"]]
+            .drop_duplicates()
+            .groupby("speaker_id")
+            .size()
+        )
+
+        ax = counts.plot(kind="hist", bins=30, figsize=(10, 5))
+
+        ax.set_title("Distribuição de sessões por falante")
+        ax.set_xlabel("Qtd. sessões por falante")
+        ax.set_ylabel("Qtd. falantes")
+
+        self._add_histogram_labels(ax)
+
+        self._save_or_show("recordings_per_speaker.png")
+
+
+    def plot_top_pathology_groups(self, top_n: int = 20) -> None:
+        if "pathology_group" not in self.manifest.columns:
+            raise ValueError("Column 'pathology_group' is required.")
+
+        counts = (
+            self.manifest["pathology_group"]
+            .value_counts(dropna=False)
+            .head(top_n)
+            .sort_values()
+        )
+
+        ax = counts.plot(kind="barh", figsize=(10, 8))
+
+        ax.set_title(f"{top_n} grupos de patologias mais frequentes")
+        ax.set_xlabel("Qtd. amostras")
+        ax.set_ylabel("Grupo de patologia")
+
+        self._add_horizontal_bar_labels(ax)
+
+        self._save_or_show("top_pathology_groups.png")
+
+    def generate_svd_report(self) -> None:
+        self.generate_basic_report()
+
+        available_columns = set(self.manifest.columns)
+
+        svd_plots = [
+            ({"vowel", "condition"}, self.plot_vowel_condition_coverage),
+            ({"speaker_id", "recording_id"}, self.plot_recordings_per_speaker),
+            ({"pathology_group"}, self.plot_top_pathology_groups),
+        ]
+
+        for required_columns, plot_function in svd_plots:
+            if required_columns.issubset(available_columns):
+                plot_function()

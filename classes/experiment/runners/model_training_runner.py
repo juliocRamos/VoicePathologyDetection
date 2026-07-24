@@ -219,6 +219,7 @@ class ModelTrainingRunner:
         return Pipeline([
             ("imputer", SimpleImputer()),
             ("scaler", StandardScaler()),
+            ("selector", "passthrough"),
             ("classifier", model_spec.estimator),
         ])
 

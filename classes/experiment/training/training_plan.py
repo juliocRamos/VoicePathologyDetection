@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
-
+from typing import Any, List
+from sklearn.svm import SVC
+from functools import partial
+from sklearn.feature_selection import SelectPercentile, f_classif, mutual_info_classif
+from sklearn.preprocessing import StandardScaler, RobustScaler
 from sklearn.base import BaseEstimator
 from sklearn.neural_network import MLPClassifier
 from sklearn.preprocessing import RobustScaler, StandardScaler
-from sklearn.svm import SVC
 
+from sklearn.ensemble import ExtraTreesClassifier, RandomForestClassifier
+from sklearn.feature_selection import SelectFromModel
 
 @dataclass(frozen=True)
 class FeatureScenario:
@@ -54,6 +58,21 @@ class TrainingPlan:
                 ),
                 exclude_prefixes=("glottal_",),
             ),
+            FeatureScenario(
+                name="glottal",
+                include_prefixes=("glottal_",),
+            ),
+            FeatureScenario(
+                name="all_with_glottal",
+                include_prefixes=(
+                    "harmonic_",
+                    "energy_area_",
+                    "entropy_c2_",
+                    "zcr_",
+                    "mfcc",
+                    "glottal_",
+                ),
+            ),
         ]
 
     @staticmethod
@@ -75,6 +94,7 @@ class TrainingPlan:
                             RobustScaler(),
                             "passthrough",
                         ],
+                        "selector": TrainingPlan.nonlinear_feature_selectors(random_state=random_state),
                         "classifier__C": [0.1, 1.0, 10.0],
                     }
                 ],
@@ -95,6 +115,7 @@ class TrainingPlan:
                             StandardScaler(),
                             RobustScaler(),
                         ],
+                        "selector": TrainingPlan.nonlinear_feature_selectors(random_state=random_state),
                         "classifier__C": [1.0, 10.0, 100.0],
                         "classifier__gamma": ["scale", 0.01, 0.1],
                     }
@@ -121,10 +142,64 @@ class TrainingPlan:
                             (64,),
                             (128,),
                             (128, 64),
+                            (128, 64),
                         ],
+                        "selector": TrainingPlan.nonlinear_feature_selectors(random_state=random_state),
                         "classifier__alpha": [0.0001, 0.001],
                         "classifier__learning_rate_init": [0.001],
                     }
                 ],
+            ),
+        ]
+
+    @staticmethod
+    def default_feature_selectors(random_state: int = 42) -> List[str|SelectPercentile]:
+        return [
+            "passthrough",
+            SelectPercentile(score_func=f_classif, percentile=50),
+            SelectPercentile(score_func=f_classif, percentile=75),
+            SelectPercentile(
+                score_func=partial(mutual_info_classif, random_state=random_state),
+                percentile=50,
+            ),
+            SelectPercentile(
+                score_func=partial(mutual_info_classif, random_state=random_state),
+                percentile=75,
+            ),
+        ]
+
+    @staticmethod
+    def nonlinear_feature_selectors(random_state: int = 42):
+        return [
+            "passthrough",
+
+            SelectFromModel(
+                estimator=ExtraTreesClassifier(
+                    n_estimators=300,
+                    class_weight="balanced",
+                    random_state=random_state,
+                    n_jobs=1,
+                ),
+                threshold="median",
+            ),
+
+            SelectFromModel(
+                estimator=ExtraTreesClassifier(
+                    n_estimators=300,
+                    class_weight="balanced",
+                    random_state=random_state,
+                    n_jobs=1,
+                ),
+                threshold="mean",
+            ),
+
+            SelectFromModel(
+                estimator=RandomForestClassifier(
+                    n_estimators=300,
+                    class_weight="balanced",
+                    random_state=random_state,
+                    n_jobs=1,
+                ),
+                threshold="median",
             ),
         ]
