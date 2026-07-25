@@ -19,11 +19,16 @@ from sklearn.metrics import (
 class TrainingMetricsVisualizer:
     METRIC_COLUMNS = [
         "accuracy",
+        "balanced_accuracy",
+        "uar",
         "precision",
         "sensitivity",
         "specificity",
         "f1",
+        "macro_f1",
+        "mcc",
         "auc",
+        "pr_auc",
     ]
 
     def __init__(
@@ -150,6 +155,12 @@ class TrainingMetricsVisualizer:
 
         x = np.arange(len(metric_cols))
         width = 0.8 / len(best_models_df)
+        minimum_value = float(
+            best_models_df[metric_cols]
+            .astype(float)
+            .min()
+            .min()
+        )
 
         fig, ax = plt.subplots(figsize=(12, 6))
 
@@ -166,7 +177,10 @@ class TrainingMetricsVisualizer:
 
         ax.set_xticks(x)
         ax.set_xticklabels(metric_cols, rotation=30, ha="right")
-        ax.set_ylim(0.0, 1.12)
+        ax.set_ylim(
+            min(0.0, minimum_value - 0.1),
+            1.12,
+        )
         ax.set_ylabel("Valor da métrica")
         ax.set_title("Comparação entre os melhores modelos SVM e MLP")
         ax.legend()

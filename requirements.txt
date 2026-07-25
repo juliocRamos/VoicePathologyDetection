@@ -1,0 +1,12 @@
+joblib
+librosa
+matplotlib
+nspfile
+numpy
+pandas
+praat-parselmouth
+pyarrow
+scikit-learn>=1.7
+scipy
+soundfile
+xlrd

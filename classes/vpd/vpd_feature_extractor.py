@@ -18,18 +18,33 @@ class VPDFeatureExtractor:
     def extract(self, sample) -> dict[str, Any]:
         y = np.asarray(sample.signal, dtype=np.float64)
         sr = int(sample.sr)
+        metadata = sample.metadata or {}
 
         features: dict[str, Any] = {
             "sample_id": sample.sample_id,
             "base": sample.base,
+            "filepath": str(sample.filepath),
             "label": sample.label,
             "speaker_id": sample.speaker_id,
+            "speaker_id_source": metadata.get("speaker_id_source"),
+            "recording_id": metadata.get("recording_id"),
             "sex": sample.sex,
             "age": sample.age,
             "pathology": sample.pathology,
             "pathology_code": sample.pathology_code,
+            "pathology_group": metadata.get("pathology_group"),
+            "pathology_groups": metadata.get("pathology_groups"),
             "vowel": sample.vowel,
+            "condition": metadata.get("condition"),
             "pitch": sample.pitch,
+            "file_sha256": metadata.get("file_sha256"),
+            "source_count": metadata.get("source_count"),
+            "is_consolidated_duplicate": metadata.get(
+                "is_consolidated_duplicate"
+            ),
+            "metadata_conflict_columns": metadata.get(
+                "metadata_conflict_columns"
+            ),
             "sr": sr,
             "duration": len(y) / sr if sr > 0 else np.nan,
         }

@@ -1,26 +1,30 @@
+from collections import Counter
 from pathlib import Path
-from typing import Counter
-import soundfile as sf
 
 import pandas as pd
 
+from classes.audio_sample.audio_loader.audio_file_reader import (
+    AudioFileReader,
+)
 from classes.dataset.database_inspector.database_inspector_report import DatabaseInspectorReport
 
 
 class DatabaseInspector:
-    AUDIO_EXTENSIONS = {
-        ".wav": ".flac",
-        ".mp3": ".ogg",
-    }
+    AUDIO_EXTENSIONS = AudioFileReader.SUPPORTED_EXTENSIONS
 
     METADATA_EXTENSIONS = {
         ".csv", ".tsv",
         ".xlsx", ".xls",
-        ".json", "txt"
+        ".json", ".txt"
     }
 
-    def __init__(self, root_dir):
+    def __init__(
+        self,
+        root_dir,
+        audio_reader: AudioFileReader | None = None,
+    ):
         self.root_dir = Path(root_dir)
+        self.audio_reader = audio_reader or AudioFileReader()
 
         if not self.root_dir.exists():
             raise FileNotFoundError(f"No such directory: {self.root_dir}")
@@ -73,17 +77,16 @@ class DatabaseInspector:
 
         for path in audio_files:
             try:
-                info = sf.info(path)
+                audio = self.audio_reader.read(path)
 
                 records.append({
                     "filepath": str(path),
                     "relative_path": str(path.relative_to(self.root_dir)),
-                    "samplerate": info.samplerate,
-                    "channels": info.channels,
-                    "duration": info.duration,
-                    "frames": info.frames,
-                    "format": info.format,
-                    "subtype": info.subtype,
+                    "samplerate": audio.sample_rate,
+                    "channels": audio.channels,
+                    "duration": audio.duration,
+                    "frames": audio.num_samples,
+                    "format": path.suffix.lower().lstrip("."),
                 })
             except Exception as exc:
                 records.append({

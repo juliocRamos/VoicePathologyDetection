@@ -1,39 +1,27 @@
 from pathlib import Path
-import re
-import unicodedata
 
 import pandas as pd
-import soundfile as sf
 
+from classes.audio_sample.audio_loader.audio_file_reader import AudioFileReader
 from classes.dataset.adapters.dataset_adapter import DatasetAdapter
-
-
-def normalize_text(value) -> str:
-    if pd.isna(value):
-        return ""
-
-    text = str(value).strip().lower()
-    text = unicodedata.normalize("NFKD", text)
-    text = "".join(ch for ch in text if not unicodedata.combining(ch))
-    text = re.sub(r"[^a-z0-9]+", "_", text)
-    text = re.sub(r"_+", "_", text).strip("_")
-
-    return text
-
-
-def normalize_filename_key(filename: str) -> str:
-    if pd.isna(filename):
-        return ""
-
-    return normalize_text(Path(str(filename)).stem)
+from classes.dataset.adapters.normalization import (
+    normalize_filename_key,
+    normalize_text,
+)
 
 
 class HUPADatasetAdapter(DatasetAdapter):
-    def __init__(self, root_dir, metadata_filename="HUPA segmentada.xls"):
+    def __init__(
+        self,
+        root_dir,
+        metadata_filename="HUPA segmentada.xls",
+        audio_reader: AudioFileReader | None = None,
+    ):
         super().__init__(root_dir)
 
         self.root_dir = Path(root_dir)
         self.metadata_path = self.root_dir / metadata_filename
+        self.audio_reader = audio_reader or AudioFileReader()
 
     def build_audio_index(self) -> pd.DataFrame:
         records = []
@@ -43,14 +31,18 @@ class HUPADatasetAdapter(DatasetAdapter):
             folder = relative_path.parts[0] if len(relative_path.parts) > 1 else None
 
             try:
-                info = sf.info(wav_path)
-                samplerate = info.samplerate
-                duration = info.duration
-                channels = info.channels
-            except Exception:
+                audio = self.audio_reader.read(wav_path)
+                samplerate = audio.sample_rate
+                duration = audio.duration
+                channels = audio.channels
+                audio_read_status = "ok"
+                audio_read_error = None
+            except Exception as exc:
                 samplerate = None
                 duration = None
                 channels = None
+                audio_read_status = "error"
+                audio_read_error = str(exc)
 
             file_key = normalize_filename_key(wav_path.name)
             label = self._infer_label_from_relative_path(relative_path)
@@ -72,6 +64,8 @@ class HUPADatasetAdapter(DatasetAdapter):
                 "samplerate": samplerate,
                 "duration": duration,
                 "channels": channels,
+                "audio_read_status": audio_read_status,
+                "audio_read_error": audio_read_error,
             })
 
         audio_df = pd.DataFrame(records)
@@ -212,6 +206,7 @@ class HUPADatasetAdapter(DatasetAdapter):
             )
 
         manifest["speaker_id"] = manifest["sample_id"]
+        manifest["speaker_id_source"] = "sample_id_assumption"
 
         # Toda a HUPA segmentada utilizada neste experimento corresponde à vogal /a/
         manifest["vowel"] = "a"
