@@ -1,62 +1,31 @@
-import math
-from pathlib import Path
-from typing import Any, Optional, cast, SupportsFloat, SupportsIndex
+from math import gcd
 
 import numpy as np
-import pandas as pd
-from math import gcd
 
 from scipy.signal import resample_poly
 
-from classes.audio_sample.audio_loader.audio_file_reader import AudioFileReader
-
-from classes.audio_sample.audio_loader.preprocessing.audio_preprocess_config import AudioPreprocessConfig
+from classes.audio_sample.audio_loader.preprocessing.audio_preprocess_config import (
+    AudioPreprocessConfig,
+)
 from classes.audio_sample.audio_sample import AudioSample
-
-FloatConvertible = str | bytes | bytearray | SupportsFloat | SupportsIndex
 
 
 class AudioPreprocessor:
     def __init__(
-            self,
-            config: AudioPreprocessConfig,
-            audio_reader: AudioFileReader | None = None,
+        self,
+        config: AudioPreprocessConfig,
     ):
         self.config = config
-        self.audio_reader = audio_reader or AudioFileReader()
-
-    def load_from_manifest_row(
-            self,
-            row: pd.Series,
-    ) -> AudioSample:
-        filepath = Path(row["filepath"])
-
-        loaded_audio = self.audio_reader.read(filepath)
-
-        sample = AudioSample(
-            sample_id=str(row["sample_id"]),
-            base=str(row["base"]),
-            filepath=filepath,
-            signal=loaded_audio.signal,
-            sr=loaded_audio.sample_rate,
-
-            label=self._get_optional(row, "label"),
-            speaker_id=self._get_optional(row, "speaker_id"),
-            sex=self._get_optional(row, "sex"),
-            age=self._get_optional_float(row, "age"),
-            pathology=self._get_optional(row, "pathology"),
-            pathology_code=self._get_optional(row, "pathology_code"),
-            vowel=self._get_optional(row, "vowel"),
-            pitch=self._get_optional(row, "pitch"),
-
-            metadata=row.to_dict(),
-        )
-
-        return sample
 
     def process(self, sample: AudioSample) -> AudioSample:
-        signal = sample.signal
+        signal = np.asarray(sample.signal)
         sr = sample.sr
+
+        self._validate_input_signal(
+            signal=signal,
+            sample_rate=sr,
+            sample_id=sample.sample_id,
+        )
 
         if self.config.convert_to_mono:
             signal = self.to_mono(signal)
@@ -83,14 +52,11 @@ class AudioPreprocessor:
                 pad_if_short=self.config.pad_if_short,
             )
 
-        if self.config.min_duration_sec is not None:
-            duration = signal.shape[0] / sr
-
-            if duration < self.config.min_duration_sec:
-                raise ValueError(
-                    f"Sample {sample.sample_id} has too short duration "
-                    f"{duration:.3f}s < {self.config.min_duration_sec:.3f}s"
-                )
+        self._validate_processed_signal(
+            signal=signal,
+            sample_rate=sr,
+            sample_id=sample.sample_id,
+        )
 
         return AudioSample(
             sample_id=sample.sample_id,
@@ -108,10 +74,6 @@ class AudioPreprocessor:
             pitch=sample.pitch,
             metadata=sample.metadata,
         )
-
-    def process_manifest_row(self, row: pd.Series) -> AudioSample:
-        sample = self.load_from_manifest_row(row)
-        return self.process(sample)
 
     @staticmethod
     def to_mono(signal: np.ndarray) -> np.ndarray:
@@ -143,7 +105,18 @@ class AudioPreprocessor:
         return signal - np.mean(signal)
 
     @staticmethod
-    def resample(signal: np.ndarray, original_sr: int, target_sr: int) -> np.ndarray:
+    def resample(
+        signal: np.ndarray,
+        original_sr: int,
+        target_sr: int,
+    ) -> np.ndarray:
+        if original_sr <= 0 or target_sr <= 0:
+            raise ValueError(
+                "Sample rates must be positive for resampling. "
+                f"Received original_sr={original_sr}, "
+                f"target_sr={target_sr}."
+            )
+
         divisor = gcd(original_sr, target_sr)
         up = target_sr // divisor
         down = original_sr // divisor
@@ -212,71 +185,58 @@ class AudioPreprocessor:
         )
 
     @staticmethod
-    def _is_missing(value: Any) -> bool:
-        if value is None:
-            return True
+    def _validate_input_signal(
+        signal: np.ndarray,
+        sample_rate: int,
+        sample_id: str,
+    ) -> None:
+        if sample_rate <= 0:
+            raise ValueError(
+                f"Sample {sample_id} has invalid sample rate: "
+                f"{sample_rate}."
+            )
 
-        try:
-            return bool(pd.isna(value))
-        except (TypeError, ValueError):
-            return False
+        if signal.ndim not in {1, 2}:
+            raise ValueError(
+                f"Sample {sample_id} has unsupported signal shape "
+                f"{signal.shape}. Expected mono or multichannel audio."
+            )
 
-    @classmethod
-    def _get_scalar_from_row(cls, row: pd.Series, column: str) -> Any | None:
-        if column not in row.index:
-            return None
+        if signal.shape[0] == 0:
+            raise ValueError(
+                f"Sample {sample_id} contains an empty audio signal."
+            )
 
-        value = row.loc[column]
+        if not np.issubdtype(signal.dtype, np.number):
+            raise ValueError(
+                f"Sample {sample_id} has non-numeric audio dtype: "
+                f"{signal.dtype}."
+            )
 
-        # May happen if columns are duplicated after merge.
-        if isinstance(value, pd.Series):
-            value = value.dropna()
+        if not np.all(np.isfinite(signal)):
+            raise ValueError(
+                f"Sample {sample_id} contains NaN or infinite values."
+            )
 
-            if value.empty:
-                return None
+    @staticmethod
+    def _validate_processed_signal(
+        signal: np.ndarray,
+        sample_rate: int,
+        sample_id: str,
+    ) -> None:
+        if sample_rate <= 0:
+            raise RuntimeError(
+                f"Preprocessing produced an invalid sample rate for "
+                f"{sample_id}: {sample_rate}."
+            )
 
-            value = value.iloc[0]
+        if signal.shape[0] == 0:
+            raise RuntimeError(
+                f"Preprocessing produced an empty signal for {sample_id}."
+            )
 
-        # Convert numpy scalars to Python scalars
-        if isinstance(value, np.generic):
-            value = value.item()
-
-        if cls._is_missing(value):
-            return None
-
-        return value
-
-    @classmethod
-    def _get_optional(cls, row: pd.Series, column: str) -> Optional[str]:
-        value = cls._get_scalar_from_row(row, column)
-
-        if value is None:
-            return None
-
-        return str(value)
-
-    @classmethod
-    def _get_optional_float(cls, row: pd.Series, column: str) -> Optional[float]:
-        value = cls._get_scalar_from_row(row, column)
-
-        if value is None:
-            return None
-
-        if isinstance(value, np.generic):
-            value = value.item()
-
-        if not isinstance(value, (str, int, float, bytes, bytearray)):
-            try:
-                value = cast(SupportsFloat, value)
-            except TypeError:
-                return None
-
-        try:
-            result = float(cast(FloatConvertible, value))
-        except (TypeError, ValueError):
-            return None
-
-        if math.isnan(result):
-            return None
-
-        return result
+        if not np.all(np.isfinite(signal)):
+            raise RuntimeError(
+                f"Preprocessing produced NaN or infinite values for "
+                f"{sample_id}."
+            )

@@ -1,28 +1,13 @@
 from pathlib import Path
 import re
-import unicodedata
 import pandas as pd
 
 from classes.audio_sample.audio_loader.audio_file_reader import AudioFileReader
 from classes.dataset.adapters.dataset_adapter import DatasetAdapter
-
-
-def normalize_text(value) -> str:
-    if pd.isna(value):
-        return ""
-
-    text = str(value).strip().lower()
-    text = unicodedata.normalize("NFKD", text)
-    text = "".join(ch for ch in text if not unicodedata.combining(ch))
-    text = re.sub(r"[^a-z0-9]+", "_", text)
-    return re.sub(r"_+", "_", text).strip("_")
-
-
-def normalize_recording_id(value) -> str:
-    if pd.isna(value):
-        return ""
-
-    return re.sub(r"\.0$", "", str(value).strip())
+from classes.dataset.adapters.normalization import (
+    normalize_recording_id,
+    normalize_text,
+)
 
 
 class SVDAdapter(DatasetAdapter):
@@ -243,6 +228,7 @@ class SVDAdapter(DatasetAdapter):
         manifest["pathology"] = manifest["pathology"].fillna(
             manifest["pathology_group"]
         )
+        manifest["speaker_id_source"] = "metadata"
 
         return manifest
 

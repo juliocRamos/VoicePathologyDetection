@@ -222,3 +222,4 @@ __marimo__/
 
 # experiments folder
 data/experiments/**
+data/*/experiments/**

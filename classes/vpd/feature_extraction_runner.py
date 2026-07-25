@@ -1,12 +1,27 @@
 import pandas as pd
 
+from classes.audio_sample.audio_loader.manifest_audio_sample_loader import (
+    ManifestAudioSampleLoader,
+)
+from classes.audio_sample.audio_loader.preprocessing.audio_preprocessor import (
+    AudioPreprocessor,
+)
 from classes.vpd.vpd_feature_extractor import VPDFeatureExtractor
 
 
 class FeatureExtractionRunner:
-    def __init__(self, preprocessor, extractor: VPDFeatureExtractor):
+    def __init__(
+        self,
+        preprocessor: AudioPreprocessor,
+        extractor: VPDFeatureExtractor,
+        sample_loader: ManifestAudioSampleLoader | None = None,
+    ):
         self.preprocessor = preprocessor
         self.extractor = extractor
+        self.sample_loader = (
+            sample_loader
+            or ManifestAudioSampleLoader()
+        )
 
     def extract_from_manifest(
         self,
@@ -23,7 +38,8 @@ class FeatureExtractionRunner:
 
         for _, row in rows.iterrows():
             try:
-                sample = self.preprocessor.process_manifest_row(row)
+                sample = self.sample_loader.load(row)
+                sample = self.preprocessor.process(sample)
                 record = self.extractor.extract(sample)
 
                 record["status"] = "ok"
@@ -33,14 +49,34 @@ class FeatureExtractionRunner:
                 record = {
                     "sample_id": row.get("sample_id"),
                     "base": row.get("base"),
+                    "filepath": row.get("filepath"),
                     "label": row.get("label"),
                     "speaker_id": row.get("speaker_id"),
+                    "speaker_id_source": row.get(
+                        "speaker_id_source"
+                    ),
+                    "recording_id": row.get("recording_id"),
                     "sex": row.get("sex"),
                     "age": row.get("age"),
                     "pathology": row.get("pathology"),
                     "pathology_code": row.get("pathology_code"),
+                    "pathology_group": row.get(
+                        "pathology_group"
+                    ),
+                    "pathology_groups": row.get(
+                        "pathology_groups"
+                    ),
                     "vowel": row.get("vowel"),
+                    "condition": row.get("condition"),
                     "pitch": row.get("pitch"),
+                    "file_sha256": row.get("file_sha256"),
+                    "source_count": row.get("source_count"),
+                    "is_consolidated_duplicate": row.get(
+                        "is_consolidated_duplicate"
+                    ),
+                    "metadata_conflict_columns": row.get(
+                        "metadata_conflict_columns"
+                    ),
                     "status": "error",
                     "error": str(exc),
                 }

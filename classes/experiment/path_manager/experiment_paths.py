@@ -34,7 +34,13 @@ class ExperimentPaths:
             f"{slugify(experiment_name)}"
         )
 
-        root_dir = data_root / "experiments" / run_name
+        dataset_dir = slugify(dataset_name).upper()
+        root_dir = (
+            data_root
+            / dataset_dir
+            / "experiments"
+            / run_name
+        )
 
         paths = cls(
             root_dir=root_dir,

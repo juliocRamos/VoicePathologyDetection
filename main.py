@@ -6,12 +6,20 @@ from pathlib import Path
 from classes.audio_sample.audio_loader.preprocessing.audio_preprocess_config import (
     AudioPreprocessConfig,
 )
+from classes.dataset.preparation.hupa_training_manifest_builder import (
+    HUPATrainingManifestConfig,
+)
+from classes.dataset.preparation.svd_training_manifest_builder import (
+    SVDTrainingManifestConfig,
+)
 from classes.experiment.runners.hupa_experiment_runner import (
     HUPAExperimentRunner,
 )
+from classes.experiment.runners.experiment_stage import ExperimentStage
 from classes.experiment.runners.svd_experiment_runner import (
     SVDExperimentRunner,
 )
+from classes.experiment.training.training_config import TrainingConfig
 from classes.vpd.vpd_feature_config import VPDFeatureConfig
 
 
@@ -36,7 +44,6 @@ def build_preprocess_config() -> AudioPreprocessConfig:
         target_dbfs=-20.0,
         peak_limit=0.99,
         center_crop=False,
-        min_duration_sec=0.5,
     )
 
 
@@ -56,10 +63,54 @@ def build_feature_config() -> VPDFeatureConfig:
     )
 
 
+def build_hupa_manifest_config() -> HUPATrainingManifestConfig:
+    return HUPATrainingManifestConfig(
+        adults_only=False,
+        minimum_duration_sec=0.5,
+        require_audio_status_ok=True,
+        require_speaker_id=True,
+    )
+
+
+def build_svd_manifest_config() -> SVDTrainingManifestConfig:
+    return SVDTrainingManifestConfig(
+        vowels=("a",),
+        conditions=("n",),
+        adults_only=True,
+        minimum_age=18.0,
+        minimum_duration_sec=0.5,
+        require_audio_status_ok=True,
+        require_speaker_id=True,
+    )
+
+
+def build_training_config() -> TrainingConfig:
+    return TrainingConfig(
+        label_col="label",
+        positive_label="pathological",
+        negative_label="healthy",
+        group_col="speaker_id",
+        test_size=0.20,
+        random_state=42,
+        cv_folds=5,
+        scoring="balanced_accuracy",
+        n_jobs=-1,
+        bootstrap_iterations=1_000,
+        confidence_level=0.95,
+        save_models=True,
+        save_predictions=True,
+        save_cv_results=True,
+        save_split_assignments=True,
+    )
+
+
 def run_hupa_experiment(
     preprocess_config: AudioPreprocessConfig,
     feature_config: VPDFeatureConfig,
+    manifest_config: HUPATrainingManifestConfig,
+    training_config: TrainingConfig,
     experiment_name: str,
+    stage: ExperimentStage,
 ) -> None:
     runner = HUPAExperimentRunner(
         dataset_root=HUPA_ROOT,
@@ -67,15 +118,20 @@ def run_hupa_experiment(
         experiment_name=experiment_name,
         preprocess_config=preprocess_config,
         feature_config=feature_config,
+        manifest_config=manifest_config,
+        training_config=training_config,
     )
 
-    runner.run()
+    runner.run(stage=stage)
 
 
 def run_svd_experiment(
     preprocess_config: AudioPreprocessConfig,
     feature_config: VPDFeatureConfig,
+    manifest_config: SVDTrainingManifestConfig,
+    training_config: TrainingConfig,
     experiment_name: str,
+    stage: ExperimentStage,
 ) -> None:
     runner = SVDExperimentRunner(
         dataset_root=SVD_ROOT,
@@ -83,9 +139,11 @@ def run_svd_experiment(
         experiment_name=experiment_name,
         preprocess_config=preprocess_config,
         feature_config=feature_config,
+        manifest_config=manifest_config,
+        training_config=training_config,
     )
 
-    runner.run()
+    runner.run(stage=stage)
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -107,6 +165,20 @@ def parse_arguments() -> argparse.Namespace:
         help="Optional experiment name.",
     )
 
+    parser.add_argument(
+        "--stage",
+        choices=[
+            stage.value
+            for stage in ExperimentStage
+        ],
+        default=ExperimentStage.PREPARE.value,
+        help=(
+            "Last pipeline stage to execute. 'prepare' is the safe "
+            "default; 'features' also extracts attributes; 'train' "
+            "runs the complete experiment."
+        ),
+    )
+
     return parser.parse_args()
 
 
@@ -115,6 +187,8 @@ def main() -> None:
 
     preprocess_config = build_preprocess_config()
     feature_config = build_feature_config()
+    training_config = build_training_config()
+    stage = ExperimentStage(args.stage)
 
     experiment_name = (
         args.experiment_name
@@ -125,14 +199,20 @@ def main() -> None:
         run_hupa_experiment(
             preprocess_config=preprocess_config,
             feature_config=feature_config,
+            manifest_config=build_hupa_manifest_config(),
+            training_config=training_config,
             experiment_name=experiment_name,
+            stage=stage,
         )
 
     elif args.dataset == "svd":
         run_svd_experiment(
             preprocess_config=preprocess_config,
             feature_config=feature_config,
+            manifest_config=build_svd_manifest_config(),
+            training_config=training_config,
             experiment_name=experiment_name,
+            stage=stage,
         )
 
     else:

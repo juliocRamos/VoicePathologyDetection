@@ -4,12 +4,25 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from classes.audio_sample.audio_loader.preprocessing.audio_preprocessor import AudioPreprocessor
+from classes.audio_sample.audio_loader.manifest_audio_sample_loader import (
+    ManifestAudioSampleLoader,
+)
+from classes.audio_sample.audio_loader.preprocessing.audio_preprocessor import (
+    AudioPreprocessor,
+)
 
 
 class ProcessedAudioProfiler:
-    def __init__(self, processor:AudioPreprocessor):
+    def __init__(
+        self,
+        processor: AudioPreprocessor,
+        sample_loader: ManifestAudioSampleLoader | None = None,
+    ):
         self.preprocessor = processor
+        self.sample_loader = (
+            sample_loader
+            or ManifestAudioSampleLoader()
+        )
 
     def profile_manifest(
             self,
@@ -25,7 +38,8 @@ class ProcessedAudioProfiler:
 
         for _, row in rows.iterrows():
             try:
-                sample = self.preprocessor.process_manifest_row(row)
+                sample = self.sample_loader.load(row)
+                sample = self.preprocessor.process(sample)
 
                 signal = sample.signal
 
@@ -38,11 +52,15 @@ class ProcessedAudioProfiler:
                     "filepath": str(sample.filepath),
                     "label": sample.label,
                     "speaker_id": sample.speaker_id,
+                    "recording_id": sample.metadata.get(
+                        "recording_id"
+                    ),
                     "sex": sample.sex,
                     "age": sample.age,
                     "pathology": sample.pathology,
                     "pathology_code": sample.pathology_code,
                     "vowel": sample.vowel,
+                    "condition": sample.metadata.get("condition"),
                     "pitch": sample.pitch,
                     "processed_sr": sample.sr,
                     "processed_duration": sample.duration,
@@ -59,11 +77,13 @@ class ProcessedAudioProfiler:
                     "filepath": row.get("filepath"),
                     "label": row.get("label"),
                     "speaker_id": row.get("speaker_id"),
+                    "recording_id": row.get("recording_id"),
                     "sex": row.get("sex"),
                     "age": row.get("age"),
                     "pathology": row.get("pathology"),
                     "pathology_code": row.get("pathology_code"),
                     "vowel": row.get("vowel"),
+                    "condition": row.get("condition"),
                     "pitch": row.get("pitch"),
                     "processed_sr": None,
                     "processed_duration": None,
