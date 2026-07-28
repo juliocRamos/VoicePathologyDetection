@@ -221,6 +221,65 @@ class TrainingManifestBuilderTests(unittest.TestCase):
             )
             self.assertEqual(pathological["source_count"], 2)
 
+    def test_hupa_adult_cohort_excludes_duplicate_age_conflicts(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            duplicate_a = self._write(root / "p1.wav", b"same-audio")
+            duplicate_b = self._write(root / "p2.wav", b"same-audio")
+            pathological = self._write(
+                root / "p3.wav",
+                b"pathological",
+            )
+            healthy = self._write(root / "h1.wav", b"healthy")
+            rows = [
+                self._hupa_row(
+                    "p1",
+                    duplicate_a,
+                    "pathological",
+                    age=40,
+                ),
+                self._hupa_row(
+                    "p2",
+                    duplicate_b,
+                    "pathological",
+                    age=60,
+                ),
+                self._hupa_row(
+                    "p3",
+                    pathological,
+                    "pathological",
+                    age=50,
+                ),
+                self._hupa_row(
+                    "h1",
+                    healthy,
+                    "healthy",
+                    age=30,
+                ),
+            ]
+
+            result = HUPATrainingManifestBuilder(
+                HUPATrainingManifestConfig(
+                    adults_only=True,
+                    minimum_age=18,
+                )
+            ).build(pd.DataFrame(rows))
+
+            self.assertEqual(len(result.training_manifest), 2)
+            self.assertTrue(
+                pd.to_numeric(
+                    result.training_manifest["age"],
+                    errors="coerce",
+                ).ge(18).all()
+            )
+            self.assertEqual(
+                set(result.excluded_samples["exclusion_reason"]),
+                {"conflicting_age_for_duplicate_audio"},
+            )
+            self.assertEqual(len(result.excluded_samples), 2)
+
     def test_hupa_builder_rejects_identical_audio_with_two_labels(
         self,
     ) -> None:

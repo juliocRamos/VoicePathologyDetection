@@ -72,7 +72,7 @@ class HUPAExperimentRunner:
     def run(
         self,
         stage: ExperimentStage = ExperimentStage.PREPARE,
-    ) -> None:
+    ) -> pd.DataFrame | None:
         self.save_config(stage=stage)
 
         raw_manifest = self.build_manifest()
@@ -104,6 +104,7 @@ class HUPAExperimentRunner:
         )
 
         print(f"\nExperiment saved in:\n{self.paths.root_dir}")
+        return features_df
 
     def save_config(self, stage: ExperimentStage) -> None:
         config_data = {
@@ -321,6 +322,7 @@ class HUPAExperimentRunner:
 
         model_specs = TrainingPlan.default_model_specs(
             random_state=self.training_config.random_state,
+            compute_backend=self.training_config.compute_backend,
         )
 
         training_runner = ModelTrainingRunner(
@@ -380,6 +382,4 @@ class HUPAExperimentRunner:
             return value
 
         return str(value)
-
-
 
