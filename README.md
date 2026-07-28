@@ -48,7 +48,60 @@ Select the last stage explicitly when extracting features or training:
 .venv/bin/python main.py --dataset svd --stage features
 .venv/bin/python main.py --dataset svd --stage train
 .venv/bin/python main.py --dataset hupa --stage train
+.venv/bin/python main.py --dataset cross --stage train
+.venv/bin/python main.py --dataset pooled --stage train
 ```
+
+These four commands provide five comparable protocols. All use adults,
+the sustained vowel `/a/`, and normal SVD phonation:
+
+```text
+1. HUPA       -> grouped HUPA holdout
+2. SVD        -> grouped SVD holdout
+3. HUPA       -> external test on all SVD
+4. SVD        -> external test on all HUPA
+5. HUPA + SVD -> grouped mixed holdout, reported globally and per database
+```
+
+In every protocol, held-out data are not used for model selection.
+Feature scenario, model family, preprocessing, and hyperparameters are
+selected by grouped cross-validation on the training partition. The
+selected pipeline is refitted on that complete partition and evaluated
+once on the holdout.
+
+The `cross` command executes both external-validation directions:
+
+```text
+HUPA -> grouped CV selects one pipeline -> refit HUPA -> test once on SVD
+SVD  -> grouped CV selects one pipeline -> refit SVD  -> test once on HUPA
+```
+
+Only sustained vowel `/a/` at the normal SVD condition is used in this
+mode to match the HUPA vocal task, and both cohorts contain only adults
+with valid age. The destination database is never used to choose the
+feature scenario, model family, hyperparameters, imputer, scaler, or
+feature selector. Training-only candidate rankings are saved as
+`source_model_selection.csv`; only the selected pipeline is evaluated
+on the destination database. Cross-database artifacts are written below
+`data/CROSS_DATABASE/experiments/`.
+
+The `pooled` command combines the harmonized HUPA and SVD cohorts.
+Speaker groups are prefixed as `HUPA::<speaker_id>` and
+`SVD::<speaker_id>`, preventing identifier collisions. Holdout and
+inner-CV folds are stratified by the four database/class combinations
+and remain speaker-disjoint. The selected model produces four metric
+rows:
+
+```text
+overall
+base:HUPA
+base:SVD
+base:macro
+```
+
+The macro row gives equal influence to both databases regardless of
+their sample counts. Pooled artifacts are written below
+`data/POOLED/experiments/`.
 
 Experiment artifacts are written below:
 
@@ -73,6 +126,31 @@ test metrics.
 - Class balancing is applied only while fitting training folds.
 - Confidence intervals are bootstrapped by speaker rather than by
   individual recording.
+- Cross-database tests use only acoustic features available in both
+  databases and save the audited schema in `splits/feature_schema.csv`.
+- Cross-database reports compare age, sex, class, speaker count, and
+  pathology distributions between the adult HUPA and SVD cohorts.
+- Pooled training uses only numeric acoustic features available in both
+  databases and saves `reports/pooled_feature_schema.csv`.
+- Pooled holdout and CV folds contain every available database/class
+  stratum and never split a prefixed speaker group.
+- SMOTE is not used by default; class imbalance is handled with class
+  or sample weights without synthesizing medical observations.
+
+## Neural-network training curves
+
+The MLP saves per-epoch CSV and PNG histories below
+`training/figures/training_curves/`. A separate diagnostic fit uses a
+speaker-grouped validation fold and records training/validation loss,
+accuracy, and balanced accuracy for both the scikit-learn CPU MLP and
+the PyTorch MLP. Its auditable group assignments are saved below
+`training/splits/`.
+
+The diagnostic fit exists only to visualize optimization and
+overfitting. It does not replace the final pipeline, which is refitted
+on all source training data before holdout or external evaluation.
+Cross-database generalization must be read from the metrics and
+prediction artifacts produced for each direction.
 
 ## Known HUPA identity limitation
 

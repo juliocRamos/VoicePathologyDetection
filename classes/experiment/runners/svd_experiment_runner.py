@@ -75,7 +75,7 @@ class SVDExperimentRunner:
     def run(
         self,
         stage: ExperimentStage = ExperimentStage.PREPARE,
-    ) -> None:
+    ) -> pd.DataFrame | None:
         self.save_config(stage=stage)
 
         raw_manifest = self.build_manifest()
@@ -107,6 +107,7 @@ class SVDExperimentRunner:
         )
 
         print(f"\nSVD experiment saved in:\n{self.paths.root_dir}")
+        return features_df
 
     def save_config(self, stage: ExperimentStage) -> None:
         config_data = {
@@ -279,6 +280,7 @@ class SVDExperimentRunner:
         feature_scenarios = TrainingPlan.default_feature_scenarios()
         model_specs = TrainingPlan.default_model_specs(
             random_state=self.training_config.random_state,
+            compute_backend=self.training_config.compute_backend,
         )
         training_runner = ModelTrainingRunner(
             features_df=features_df,

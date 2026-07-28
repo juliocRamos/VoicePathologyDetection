@@ -102,6 +102,11 @@ class HUPATrainingManifestBuilder(TrainingManifestBuilder):
         )
         excluded_frames.append(hash_exclusions)
 
+        candidates, age_conflict_exclusions = (
+            self._exclude_conflicting_adult_ages(candidates)
+        )
+        excluded_frames.append(age_conflict_exclusions)
+
         if candidates.empty:
             raise ValueError(
                 "No HUPA samples remain after calculating file hashes."
@@ -150,6 +155,45 @@ class HUPATrainingManifestBuilder(TrainingManifestBuilder):
             excluded_samples=excluded_samples,
             duplicate_groups=duplicate_groups,
             summary=summary,
+        )
+
+    def _exclude_conflicting_adult_ages(
+        self,
+        candidates: pd.DataFrame,
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+        if not self.config.adults_only:
+            return (
+                candidates.copy(),
+                self._empty_exclusions(candidates),
+            )
+
+        age = pd.to_numeric(candidates["age"], errors="coerce")
+        distinct_ages = (
+            candidates.assign(_numeric_age=age)
+            .groupby(self.HASH_COLUMN)["_numeric_age"]
+            .nunique(dropna=True)
+        )
+        conflicting_hashes = distinct_ages[
+            distinct_ages > 1
+        ].index
+        mask = candidates[self.HASH_COLUMN].isin(conflicting_hashes)
+        detail = (
+            candidates.loc[mask]
+            .groupby(self.HASH_COLUMN)["age"]
+            .transform(
+                lambda values: (
+                    "conflicting_adult_ages="
+                    + self._join_unique_values(values)
+                )
+            )
+            .reindex(candidates.index)
+        )
+
+        return self._exclude_rows(
+            dataframe=candidates,
+            mask=mask,
+            reason="conflicting_age_for_duplicate_audio",
+            detail=detail,
         )
 
     def _validate_duplicate_labels(
