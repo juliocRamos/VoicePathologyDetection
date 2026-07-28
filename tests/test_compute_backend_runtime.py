@@ -1,10 +1,11 @@
 import sys
 import unittest
 from types import ModuleType
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from classes.experiment.training.compute_backend import ComputeBackend
 from classes.experiment.training.compute_backend_runtime import (
+    configure_torch_determinism,
     ensure_compute_backend_ready,
 )
 
@@ -45,6 +46,26 @@ class ComputeBackendRuntimeTests(unittest.TestCase):
                 ensure_compute_backend_ready(
                     ComputeBackend.CUDA
                 )
+
+    def test_torch_determinism_disables_cudnn_benchmark(
+        self,
+    ) -> None:
+        torch_module = Mock()
+        torch_module.backends.cudnn.benchmark = True
+        torch_module.backends.cudnn.deterministic = False
+
+        configure_torch_determinism(torch_module)
+
+        torch_module.use_deterministic_algorithms.assert_called_once_with(
+            True,
+            warn_only=True,
+        )
+        self.assertFalse(
+            torch_module.backends.cudnn.benchmark
+        )
+        self.assertTrue(
+            torch_module.backends.cudnn.deterministic
+        )
 
 
 if __name__ == "__main__":

@@ -5,6 +5,19 @@ import sys
 from classes.experiment.training.compute_backend import ComputeBackend
 
 
+TORCH_DETERMINISTIC_ALGORITHMS = True
+TORCH_DETERMINISTIC_WARN_ONLY = True
+
+
+def configure_torch_determinism(torch_module) -> None:
+    torch_module.use_deterministic_algorithms(
+        TORCH_DETERMINISTIC_ALGORITHMS,
+        warn_only=TORCH_DETERMINISTIC_WARN_ONLY,
+    )
+    torch_module.backends.cudnn.benchmark = False
+    torch_module.backends.cudnn.deterministic = True
+
+
 def activate_compute_backend(
     backend: ComputeBackend,
 ) -> None:
@@ -42,6 +55,8 @@ def activate_compute_backend(
         raise RuntimeError(
             "PyTorch could not access a CUDA device."
         )
+
+    configure_torch_determinism(torch)
 
 
 def ensure_compute_backend_ready(

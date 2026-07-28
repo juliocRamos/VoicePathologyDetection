@@ -36,6 +36,27 @@ class TrainingConfigTests(unittest.TestCase):
         ):
             TrainingConfig(grid_search_verbose=-1)
 
+    def test_learning_curve_sizes_must_be_sorted(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unique and sorted"):
+            TrainingConfig(
+                learning_curve_train_sizes=(0.5, 0.25, 1.0),
+            )
+
+    def test_nested_cv_requires_multiple_folds(self) -> None:
+        with self.assertRaisesRegex(ValueError, "at least 2"):
+            TrainingConfig(nested_cv_folds=1)
+
+    def test_protocol_version_cannot_be_empty(self) -> None:
+        with self.assertRaisesRegex(ValueError, "cannot be empty"):
+            TrainingConfig(protocol_version=" ")
+
+    def test_cpu_is_not_eligible_for_final_reporting(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Only CUDA"):
+            TrainingConfig(
+                compute_backend=ComputeBackend.CPU,
+                eligible_for_final_reporting=True,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
