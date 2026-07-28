@@ -108,6 +108,14 @@ class ExperimentConfigFactory:
         compute_backend: ComputeBackend,
     ) -> TrainingConfig:
         return TrainingConfig(
+            protocol_version=(
+                "gpu_confirmatory_v2"
+                if compute_backend.uses_cuda
+                else "cpu_development_fallback_v1"
+            ),
+            eligible_for_final_reporting=(
+                compute_backend.uses_cuda
+            ),
             label_col="label",
             positive_label="pathological",
             negative_label="healthy",
@@ -115,12 +123,23 @@ class ExperimentConfigFactory:
             test_size=0.20,
             random_state=42,
             cv_folds=5,
+            selection_score_tolerance=0.005,
             compute_backend=compute_backend,
             scoring="balanced_accuracy",
             grid_search_verbose=2,
             n_jobs=1 if compute_backend.uses_cuda else -1,
             bootstrap_iterations=1_000,
             confidence_level=0.95,
+            run_grouped_svm_learning_curve=True,
+            learning_curve_train_sizes=(
+                0.25,
+                0.50,
+                0.75,
+                1.00,
+            ),
+            run_repeated_nested_cv=True,
+            nested_cv_folds=3,
+            nested_cv_repeats=2,
             save_models=True,
             save_predictions=True,
             save_cv_results=True,

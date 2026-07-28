@@ -126,13 +126,19 @@ class PooledDatabaseExperimentRunner:
         )
         metrics = training_runner.run()
 
-        overall_metrics = metrics[
-            metrics["evaluation_scope"].eq("overall")
+        report_metrics = (
+            training_runner.family_comparison_metrics_df
+        )
+        if report_metrics.empty:
+            report_metrics = metrics
+        overall_metrics = report_metrics[
+            report_metrics["evaluation_scope"].eq("overall")
         ].copy()
         visualizer = TrainingMetricsVisualizer(
             metrics_df=overall_metrics,
             predictions_dir=training_dir / "predictions",
             output_dir=training_dir / "figures",
+            ranking_df=training_runner.source_selection_df,
         )
         visualizer.generate_best_models_report(
             best_metric="balanced_accuracy"

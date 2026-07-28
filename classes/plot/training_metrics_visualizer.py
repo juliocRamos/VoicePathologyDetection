@@ -18,13 +18,9 @@ from sklearn.metrics import (
 
 class TrainingMetricsVisualizer:
     METRIC_COLUMNS = [
-        "accuracy",
         "balanced_accuracy",
-        "uar",
-        "precision",
         "sensitivity",
         "specificity",
-        "f1",
         "macro_f1",
         "mcc",
         "auc",
@@ -36,13 +32,18 @@ class TrainingMetricsVisualizer:
         metrics_df: pd.DataFrame,
         predictions_dir: str | Path,
         output_dir: str | Path,
+        ranking_df: pd.DataFrame | None = None,
     ):
         self.metrics_df = metrics_df.copy()
+        self.ranking_df = (
+            ranking_df.copy()
+            if ranking_df is not None
+            else pd.DataFrame()
+        )
         self.predictions_dir = Path(predictions_dir)
         self.output_dir = Path(output_dir)
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
-
 
     @staticmethod
     def _add_bar_labels(ax, fmt: str = "{:.3f}") -> None:
@@ -74,89 +75,91 @@ class TrainingMetricsVisualizer:
         self,
         best_metric: str = "f1",
     ) -> None:
-        best_models_df = self._select_best_svm_and_mlp(
-            best_metric=best_metric,
-        )
+        family_champions_df = self._validate_family_champions()
 
-        if best_models_df.empty:
-            print("[WARNING] No SVM/MLP model found to use plot.")
+        if family_champions_df.empty:
+            print("[WARNING] No SVM/MLP family champion found to plot.")
             return
 
-        self.plot_best_svm_vs_mlp_metrics(
-            best_models_df=best_models_df,
-            filename="best_svm_vs_mlp_metrics.png",
+        self.plot_family_champions_metrics(
+            family_champions_df=family_champions_df,
+            filename=(
+                "training_cv_family_champions_holdout_metrics.png"
+            ),
         )
 
         self.plot_top_models(
             best_metric=best_metric,
-            filename=f"top_models_by_{best_metric}.png",
+            filename=(
+                "top_5_training_cv_pipelines_by_"
+                f"{best_metric}.png"
+            ),
+            top_n=5,
         )
 
         self.plot_confusion_matrices_for_best_models(
-            best_models_df=best_models_df,
+            best_models_df=family_champions_df,
         )
 
         self.plot_roc_curves_for_best_models(
-            best_models_df=best_models_df,
-            filename="best_svm_mlp_roc_curve.png",
+            best_models_df=family_champions_df,
+            filename=(
+                "training_cv_family_champions_holdout_roc.png"
+            ),
         )
 
-    def _select_best_svm_and_mlp(
-        self,
-        best_metric: str = "f1",
-    ) -> pd.DataFrame:
+    def _validate_family_champions(self) -> pd.DataFrame:
+        """Return prespecified champions without ranking by holdout data."""
         df = self.metrics_df.copy()
 
-        if best_metric not in df.columns:
-            raise ValueError(f"Metric '{best_metric}' not found in metrics_df.")
+        champion_rows = []
 
-        df = df.dropna(subset=[best_metric]).copy()
+        for family, pattern in (
+            ("SVM", "svm"),
+            ("MLP", "mlp"),
+        ):
+            family_df = df[
+                df["model"].astype(str).str.contains(
+                    pattern,
+                    case=False,
+                    na=False,
+                )
+            ]
 
-        best_rows = []
+            if len(family_df) > 1:
+                raise ValueError(
+                    f"Expected at most one prespecified {family} "
+                    "champion. Family champions must be selected by "
+                    "training CV before holdout visualization."
+                )
 
-        svm_df = df[df["model"].astype(str).str.contains("svm", case=False, na=False)]
-        mlp_df = df[df["model"].astype(str).str.contains("mlp", case=False, na=False)]
+            if len(family_df) == 1:
+                champion_rows.append(family_df.iloc[0])
 
-        if not svm_df.empty:
-            best_rows.append(
-                svm_df.sort_values(
-                    by=[best_metric, "accuracy"],
-                    ascending=False,
-                ).iloc[0]
-            )
-
-        if not mlp_df.empty:
-            best_rows.append(
-                mlp_df.sort_values(
-                    by=[best_metric, "accuracy"],
-                    ascending=False,
-                ).iloc[0]
-            )
-
-        if not best_rows:
+        if not champion_rows:
             return pd.DataFrame()
 
-        return pd.DataFrame(best_rows)
+        return pd.DataFrame(champion_rows)
 
-    def plot_best_svm_vs_mlp_metrics(
+    def plot_family_champions_metrics(
         self,
-        best_models_df: pd.DataFrame,
+        family_champions_df: pd.DataFrame,
         filename: str,
     ) -> None:
         metric_cols = [
             col for col in self.METRIC_COLUMNS
-            if col in best_models_df.columns
+            if col in family_champions_df.columns
         ]
 
         labels = [
             f"{row['model']}\n{row['scenario']}"
-            for _, row in best_models_df.iterrows()
+            for _, row in family_champions_df.iterrows()
         ]
 
         x = np.arange(len(metric_cols))
-        width = 0.8 / len(best_models_df)
+        width = 0.8 / len(family_champions_df)
         minimum_value = float(
-            best_models_df[metric_cols]
+            family_champions_df[metric_cols]
             .astype(float)
             .min()
             .min()
@@ -164,9 +167,13 @@ class TrainingMetricsVisualizer:
 
         fig, ax = plt.subplots(figsize=(12, 6))
 
-        for i, (_, row) in enumerate(best_models_df.iterrows()):
+        for i, (_, row) in enumerate(
+            family_champions_df.iterrows()
+        ):
             values = row[metric_cols].astype(float).to_numpy()
-            offset = (i - (len(best_models_df) - 1) / 2) * width
+            offset = (
+                i - (len(family_champions_df) - 1) / 2
+            ) * width
 
             ax.bar(
                 x + offset,
@@ -181,8 +188,10 @@ class TrainingMetricsVisualizer:
             min(0.0, minimum_value - 0.1),
             1.12,
         )
-        ax.set_ylabel("Valor da métrica")
-        ax.set_title("Comparação entre os melhores modelos SVM e MLP")
+        ax.set_ylabel("Metric value")
+        ax.set_title(
+            "Holdout performance of training-CV family champions"
+        )
         ax.legend()
         ax.grid(axis="y", alpha=0.3)
 
@@ -194,14 +203,31 @@ class TrainingMetricsVisualizer:
         self,
         best_metric: str = "f1",
         filename: str = "top_models_by_f1.png",
-        top_n: int = 10,
+        top_n: int = 5,
     ) -> None:
-        df = self.metrics_df.copy()
+        if (
+            not self.ranking_df.empty
+            and "best_cv_score" in self.ranking_df.columns
+        ):
+            df = self.ranking_df.copy()
+            ranking_column = "best_cv_score"
+            axis_label = f"{best_metric} (training CV)"
+            title = (
+                f"Top {top_n} pipelines by training-CV "
+                f"{best_metric}"
+            )
+        else:
+            df = self.metrics_df.copy()
+            ranking_column = best_metric
+            axis_label = best_metric
+            title = f"Top {top_n} models by {best_metric}"
 
-        if best_metric not in df.columns:
-            raise ValueError(f"Metric '{best_metric}' not found in metrics_df.")
+        if ranking_column not in df.columns:
+            raise ValueError(
+                f"Metric '{ranking_column}' not found in ranking data."
+            )
 
-        df = df.dropna(subset=[best_metric]).copy()
+        df = df.dropna(subset=[ranking_column]).copy()
 
         df["model_label"] = (
             df["model"].astype(str)
@@ -210,7 +236,7 @@ class TrainingMetricsVisualizer:
         )
 
         top_df = df.sort_values(
-            by=[best_metric, "accuracy"],
+            by=ranking_column,
             ascending=False,
         ).head(top_n)
 
@@ -218,12 +244,12 @@ class TrainingMetricsVisualizer:
 
         ax.barh(
             top_df["model_label"][::-1],
-            top_df[best_metric][::-1],
+            top_df[ranking_column][::-1],
         )
 
         ax.set_xlim(0.0, 1.12)
-        ax.set_xlabel(best_metric)
-        ax.set_title(f"Top {top_n} modelos por {best_metric}")
+        ax.set_xlabel(axis_label)
+        ax.set_title(title)
         ax.grid(axis="x", alpha=0.3)
 
         self._add_horizontal_bar_labels(ax, fmt="{:.3f}")
@@ -283,7 +309,7 @@ class TrainingMetricsVisualizer:
             colorbar=False,
         )
 
-        ax.set_title(f"Matriz de confusão\n{model} | {scenario}")
+        ax.set_title(f"Confusion matrix\n{model} | {scenario}")
 
         self._save(filename)
 
@@ -336,9 +362,11 @@ class TrainingMetricsVisualizer:
 
         ax.plot([0, 1], [0, 1], linestyle="--", label="Random")
 
-        ax.set_xlabel("Taxa de falsos positivos (FPR)")
-        ax.set_ylabel("Taxa de verdadeiros positivos (TPR)")
-        ax.set_title("Curvas ROC dos melhores modelos SVM e MLP")
+        ax.set_xlabel("False positive rate (FPR)")
+        ax.set_ylabel("True positive rate (TPR)")
+        ax.set_title(
+            "ROC curves of training-CV family champions"
+        )
         ax.legend(loc="lower right")
         ax.grid(alpha=0.3)
 

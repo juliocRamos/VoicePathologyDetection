@@ -7,6 +7,8 @@ from classes.experiment.training.compute_backend import ComputeBackend
 
 @dataclass(frozen=True)
 class TrainingConfig:
+    protocol_version: str = "development_v1"
+    eligible_for_final_reporting: bool = False
     label_col: str = "label"
     positive_label: str = "pathological"
     negative_label: str = "healthy"
@@ -16,6 +18,7 @@ class TrainingConfig:
     random_state: int = 42
 
     cv_folds: int = 5
+    selection_score_tolerance: float = 0.005
     cache_pipeline_transformers: bool = True
     scoring: str = "balanced_accuracy"
     strict_model_selection: bool = True
@@ -27,12 +30,28 @@ class TrainingConfig:
     bootstrap_iterations: int = 1_000
     confidence_level: float = 0.95
 
+    run_grouped_svm_learning_curve: bool = False
+    learning_curve_train_sizes: tuple[float, ...] = (
+        0.25,
+        0.50,
+        0.75,
+        1.00,
+    )
+    run_repeated_nested_cv: bool = False
+    nested_cv_folds: int = 3
+    nested_cv_repeats: int = 2
+
     save_models: bool = True
     save_predictions: bool = True
     save_cv_results: bool = True
     save_split_assignments: bool = True
 
     def __post_init__(self) -> None:
+        if not self.protocol_version.strip():
+            raise ValueError(
+                "protocol_version cannot be empty."
+            )
+
         if self.positive_label == self.negative_label:
             raise ValueError(
                 "positive_label and negative_label must be different."
@@ -43,6 +62,11 @@ class TrainingConfig:
 
         if self.cv_folds < 2:
             raise ValueError("cv_folds must be at least 2.")
+
+        if self.selection_score_tolerance < 0:
+            raise ValueError(
+                "selection_score_tolerance must be non-negative."
+            )
 
         if self.bootstrap_iterations < 0:
             raise ValueError(
@@ -59,12 +83,50 @@ class TrainingConfig:
                 "compute_backend must be a ComputeBackend instance."
             )
 
+        if (
+            self.eligible_for_final_reporting
+            and not self.compute_backend.uses_cuda
+        ):
+            raise ValueError(
+                "Only CUDA experiments are eligible for final "
+                "reporting."
+            )
+
         if self.n_jobs == 0:
             raise ValueError("n_jobs cannot be zero.")
 
         if self.grid_search_verbose < 0:
             raise ValueError(
                 "grid_search_verbose cannot be negative."
+            )
+
+        if self.nested_cv_folds < 2:
+            raise ValueError(
+                "nested_cv_folds must be at least 2."
+            )
+
+        if self.nested_cv_repeats < 1:
+            raise ValueError(
+                "nested_cv_repeats must be at least 1."
+            )
+
+        if (
+            not self.learning_curve_train_sizes
+            or any(
+                not 0 < size <= 1
+                for size in self.learning_curve_train_sizes
+            )
+        ):
+            raise ValueError(
+                "learning_curve_train_sizes must contain values in "
+                "(0, 1]."
+            )
+
+        if tuple(sorted(set(
+            self.learning_curve_train_sizes
+        ))) != self.learning_curve_train_sizes:
+            raise ValueError(
+                "learning_curve_train_sizes must be unique and sorted."
             )
 
         for field_name, column_name in (

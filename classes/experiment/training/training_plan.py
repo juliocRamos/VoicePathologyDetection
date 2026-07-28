@@ -9,7 +9,7 @@ from sklearn.feature_selection import (
     f_classif,
 )
 from sklearn.neural_network import MLPClassifier
-from sklearn.preprocessing import RobustScaler, StandardScaler
+from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 
 from classes.experiment.training.compute_backend import ComputeBackend
@@ -28,6 +28,7 @@ class ModelSpec:
     estimator: BaseEstimator
     param_grid: list[dict[str, list[Any]]]
     use_balanced_sample_weight: bool = False
+    rationale: str = ""
 
 
 class TrainingPlan:
@@ -83,7 +84,7 @@ class TrainingPlan:
         random_state: int = 42,
         compute_backend: ComputeBackend = ComputeBackend.CPU,
     ) -> list[ModelSpec]:
-        selectors = TrainingPlan.fast_feature_selectors()
+        selectors = TrainingPlan.shared_feature_selectors()
 
         model_specs = [
             ModelSpec(
@@ -98,14 +99,20 @@ class TrainingPlan:
                 param_grid=[
                     {
                         "imputer__strategy": ["median"],
-                        "scaler": [
-                            StandardScaler(),
-                            RobustScaler(),
-                        ],
+                        "scaler": [StandardScaler()],
                         "selector": selectors,
-                        "classifier__C": [0.1, 1.0, 10.0],
+                        "classifier__C": [
+                            0.01,
+                            0.1,
+                            1.0,
+                            10.0,
+                        ],
                     }
                 ],
+                rationale=(
+                    "Lower-capacity linear margin baseline. C controls "
+                    "regularization and is selected on grouped source CV."
+                ),
             ),
             ModelSpec(
                 name="svm_rbf",
@@ -119,15 +126,27 @@ class TrainingPlan:
                 param_grid=[
                     {
                         "imputer__strategy": ["median"],
-                        "scaler": [
-                            StandardScaler(),
-                            RobustScaler(),
-                        ],
+                        "scaler": [StandardScaler()],
                         "selector": selectors,
-                        "classifier__C": [1.0, 10.0, 100.0],
-                        "classifier__gamma": ["scale", 0.01, 0.1],
+                        "classifier__C": [
+                            0.01,
+                            0.1,
+                            1.0,
+                            10.0,
+                        ],
+                        "classifier__gamma": [
+                            "scale",
+                            0.0001,
+                            0.001,
+                            0.01,
+                        ],
                     }
                 ],
+                rationale=(
+                    "Nonlinear margin model for interactions not captured "
+                    "by the linear SVM. Low C and gamma values are included "
+                    "to favor smooth decision boundaries."
+                ),
             ),
         ]
 
@@ -148,39 +167,55 @@ class TrainingPlan:
                         # sklearn's internal early-stopping split is not
                         # group-aware and could mix sessions from one speaker.
                         early_stopping=False,
-                        max_iter=400,
+                        max_iter=30,
+                        batch_size=32,
+                        tol=0.0,
                         random_state=random_state,
                     ),
                     param_grid=[
                         {
                             "imputer__strategy": ["median"],
-                            "scaler": [
-                                StandardScaler(),
-                                RobustScaler(),
-                            ],
+                            "scaler": [StandardScaler()],
                             "classifier__hidden_layer_sizes": [
-                                (64,),
-                                (128,),
-                                (128, 64),
+                                (8,),
+                                (16,),
                             ],
                             "selector": selectors,
-                            "classifier__alpha": [0.0001, 0.001],
+                            "classifier__alpha": [0.001, 0.01],
                             "classifier__learning_rate_init": [0.001],
+                            # Epoch count is selected only by the
+                            # speaker-grouped outer GridSearchCV.
+                            "classifier__max_iter": [
+                                5,
+                                10,
+                                15,
+                                20,
+                                30,
+                            ],
+                            "classifier__batch_size": [32],
                         }
                     ],
                     use_balanced_sample_weight=True,
+                    rationale=(
+                        "CPU-only development fallback. It is not eligible "
+                        "for the confirmatory GPU results."
+                    ),
                 )
             )
 
         return model_specs
 
     @staticmethod
-    def fast_feature_selectors() -> list[str | SelectPercentile]:
+    def shared_feature_selectors() -> list[SelectPercentile]:
         return [
-            "passthrough",
+            SelectPercentile(score_func=f_classif, percentile=10),
+            SelectPercentile(score_func=f_classif, percentile=25),
             SelectPercentile(score_func=f_classif, percentile=50),
-            SelectPercentile(score_func=f_classif, percentile=75),
         ]
+
+    @staticmethod
+    def fast_feature_selectors() -> list[SelectPercentile]:
+        return TrainingPlan.shared_feature_selectors()
 
     @staticmethod
     def _cuda_mlp_spec(
@@ -210,8 +245,8 @@ class TrainingPlan:
                 criterion=nn.CrossEntropyLoss,
                 optimizer=optim.Adam,
                 lr=0.001,
-                max_epochs=150,
-                batch_size=-1,
+                max_epochs=30,
+                batch_size=32,
                 train_split=None,
                 callbacks=[
                     (
@@ -230,14 +265,51 @@ class TrainingPlan:
                     "scaler": [StandardScaler()],
                     "selector": selectors,
                     "classifier__module__hidden_layer_sizes": [
-                        (64,),
-                        (128, 64),
+                        (8,),
+                        (16,),
                     ],
-                    "classifier__optimizer__weight_decay": [
-                        0.0001,
-                        0.001,
-                    ],
+                    "classifier__module__dropout": [0.2],
+                    "classifier__optimizer__weight_decay": [0.001],
+                    "classifier__criterion__label_smoothing": [0.05],
                     "classifier__lr": [0.001],
-                }
+                    "classifier__max_epochs": [
+                        5,
+                        10,
+                        15,
+                        20,
+                    ],
+                    "classifier__batch_size": [32],
+                },
+                {
+                    "imputer__strategy": ["median"],
+                    "scaler": [StandardScaler()],
+                    "selector": selectors,
+                    "classifier__module__hidden_layer_sizes": [
+                        (8,),
+                        (16,),
+                        (16, 8),
+                    ],
+                    "classifier__module__dropout": [0.4],
+                    "classifier__optimizer__weight_decay": [0.01],
+                    "classifier__criterion__label_smoothing": [0.10],
+                    "classifier__lr": [0.001],
+                    "classifier__max_epochs": [
+                        5,
+                        10,
+                        15,
+                        20,
+                    ],
+                    "classifier__batch_size": [32],
+                },
             ],
+            rationale=(
+                "Canonical confirmatory neural network. Compact hidden "
+                "layers and short epoch budgets limit capacity. The tapered "
+                "(16, 8) architecture is evaluated only under the strong "
+                "regularization profile. Bundled moderate and strong "
+                "dropout, weight-decay, and label-smoothing profiles control "
+                "overconfidence without an internal group-unaware validation "
+                "split. Removing the 30-epoch candidate keeps the total CUDA "
+                "search budget unchanged."
+            ),
         )

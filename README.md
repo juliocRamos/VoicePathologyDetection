@@ -46,10 +46,10 @@ Select the last stage explicitly when extracting features or training:
 
 ```bash
 .venv/bin/python main.py --dataset svd --stage features
-.venv/bin/python main.py --dataset svd --stage train
-.venv/bin/python main.py --dataset hupa --stage train
-.venv/bin/python main.py --dataset cross --stage train
-.venv/bin/python main.py --dataset pooled --stage train
+.venv/bin/python main.py --dataset svd --stage train --compute-backend cuda
+.venv/bin/python main.py --dataset hupa --stage train --compute-backend cuda
+.venv/bin/python main.py --dataset cross --stage train --compute-backend cuda
+.venv/bin/python main.py --dataset pooled --stage train --compute-backend cuda
 ```
 
 These four commands provide five comparable protocols. All use adults,
@@ -63,11 +63,36 @@ the sustained vowel `/a/`, and normal SVD phonation:
 5. HUPA + SVD -> grouped mixed holdout, reported globally and per database
 ```
 
+Only CUDA executions under `gpu_confirmatory_v2` are eligible for the
+final paper. CPU support remains available for development but uses a
+different MLP implementation and must not be mixed with confirmatory
+results. The complete rationale is recorded in
+`EXPERIMENTAL_PROTOCOL.md`.
+
+A detailed, code-aligned description of data loading, cohort
+preparation, signal preprocessing, feature extraction, training,
+evaluation, and every overfitting-control decision is available in
+[`PIPELINE_DOCUMENTATION.md`](PIPELINE_DOCUMENTATION.md).
+
 In every protocol, held-out data are not used for model selection.
 Feature scenario, model family, preprocessing, and hyperparameters are
 selected by grouped cross-validation on the training partition. The
-selected pipeline is refitted on that complete partition and evaluated
-once on the holdout.
+selected pipeline is refitted on that complete partition and remains
+the single primary holdout result. A prespecified secondary analysis
+also evaluates the training-CV-selected SVM and MLP champions on the
+same holdout; holdout performance is never used to choose or rank
+candidates.
+
+Selection follows a one-standard-error rule. Configurations whose mean
+grouped-CV score is statistically indistinguishable from the numerical
+maximum are resolved in favor of lower capacity within each model
+family: fewer selected features, smaller hidden layers, fewer
+neural-network epochs, lower `C` and `gamma`, and stronger
+regularization. Global comparison between model families is
+family-neutral and prioritizes lower CV variability, a smaller
+training–CV gap, and fewer selected features. A minimum balanced-
+accuracy tolerance of `0.005` prevents negligible score differences
+from selecting a more complex pipeline.
 
 The `cross` command executes both external-validation directions:
 
@@ -81,9 +106,20 @@ mode to match the HUPA vocal task, and both cohorts contain only adults
 with valid age. The destination database is never used to choose the
 feature scenario, model family, hyperparameters, imputer, scaler, or
 feature selector. Training-only candidate rankings are saved as
-`source_model_selection.csv`; only the selected pipeline is evaluated
-on the destination database. Cross-database artifacts are written below
-`data/CROSS_DATABASE/experiments/`.
+`source_model_selection.csv`. Primary metrics remain in `metrics.csv`;
+the prespecified SVM-versus-MLP analysis is saved separately as
+`family_comparison_metrics.csv`. Cross-database artifacts are written
+below `data/CROSS_DATABASE/experiments/`.
+
+The default training protocol also runs repeated nested grouped CV only
+on the source training partition (`3` outer folds × `2` repetitions,
+with the regular `5` grouped folds used for inner selection). It
+estimates source-domain performance and model-selection stability
+without accessing the holdout or external database. This diagnostic
+substantially increases training time. The two repetitions are retained
+as a time-bounded compromise: they provide six outer estimates, which
+are all reported, while the final holdout is evaluated once with the
+prespecified seed `42`. No seed is selected by holdout performance.
 
 The `pooled` command combines the harmonized HUPA and SVD cohorts.
 Speaker groups are prefixed as `HUPA::<speaker_id>` and
@@ -113,7 +149,9 @@ Each prepared run contains the raw and curated manifests, excluded
 samples, duplicate groups, a preparation summary, preprocessing
 profiles, and figures. Training runs additionally contain split
 assignments, fitted models, predictions, cross-validation results, and
-test metrics.
+test metrics. The resolved plan and its SHA-256 hash are stored in
+`training/experimental_protocol.json` and
+`training/experimental_protocol.md`.
 
 ## Validation guarantees
 
@@ -124,6 +162,8 @@ test metrics.
 - Imputation, scaling, feature selection, and model fitting occur inside
   cross-validation.
 - Class balancing is applied only while fitting training folds.
+- Grid-search artifacts include training scores, validation scores, and
+  their generalization gap.
 - Confidence intervals are bootstrapped by speaker rather than by
   individual recording.
 - Cross-database tests use only acoustic features available in both
@@ -137,18 +177,44 @@ test metrics.
 - SMOTE is not used by default; class imbalance is handled with class
   or sample weights without synthesizing medical observations.
 
-## Neural-network training curves
+## Overfitting diagnostics
+
+When an SVM is selected, a speaker-grouped learning curve is generated
+at `25%`, `50%`, `75%`, and `100%` of the available training groups.
+Raw fold results, aggregated mean/standard-deviation curves, and
+auditable assignments are saved below
+`training/figures/learning_curves/` and `training/splits/`.
+
+Repeated nested-CV artifacts are saved as:
+
+```text
+training/metrics/repeated_nested_cv_results.csv
+training/metrics/repeated_nested_cv_summary.csv
+training/metrics/repeated_nested_cv_selection_stability.csv
+training/splits/repeated_nested_cv_assignments.csv
+```
 
 The MLP saves per-epoch CSV and PNG histories below
 `training/figures/training_curves/`. A separate diagnostic fit uses a
 speaker-grouped validation fold and records training/validation loss,
-accuracy, and balanced accuracy for both the scikit-learn CPU MLP and
-the PyTorch MLP. Its auditable group assignments are saved below
+accuracy, and balanced accuracy. Confirmatory results use only the
+PyTorch CUDA MLP; the scikit-learn CPU implementation is a development
+fallback. Auditable group assignments are saved below
 `training/splits/`.
 
 The diagnostic fit exists only to visualize optimization and
 overfitting. It does not replace the final pipeline, which is refitted
 on all source training data before holdout or external evaluation.
+The MLP epoch budget (5, 10, 15, or 20 epochs) is selected by the same
+speaker-grouped source cross-validation used for the other
+hyperparameters. The moderate regularization profile evaluates one
+hidden layer with 8 or 16 units. The strong profile additionally
+evaluates the tapered `(16, 8)` architecture. Removing the 30-epoch
+candidate keeps the total CUDA search budget unchanged while testing the
+advisor-requested deeper MLP. CUDA candidates use mini-batches, mandatory
+univariate feature selection, dropout, weight decay, and label smoothing;
+no random internal validation split or group-unaware early stopping is
+used.
 Cross-database generalization must be read from the metrics and
 prediction artifacts produced for each direction.
 

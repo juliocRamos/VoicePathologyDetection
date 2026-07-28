@@ -335,33 +335,47 @@ class HUPAExperimentRunner:
 
         metrics_df = training_runner.run()
 
-        print("\nBest results:")
-        sort_cols = [
-            col
-            for col in [
-                "balanced_accuracy",
-                "macro_f1",
-                "mcc",
-                "auc",
+        print("\nTop 5 candidates by training CV balanced accuracy:")
+        if not training_runner.source_selection_df.empty:
+            ranking_columns = [
+                column
+                for column in (
+                    "source_cv_rank",
+                    "scenario",
+                    "model",
+                    "best_cv_score",
+                    "best_cv_score_std",
+                )
+                if column
+                in training_runner.source_selection_df.columns
             ]
-            if col in metrics_df.columns
-        ]
-
-        if sort_cols:
             print(
-                metrics_df.sort_values(
-                    by=sort_cols,
-                    ascending=False,
-                ).head(10)
+                training_runner.source_selection_df[
+                    ranking_columns
+                ].head(5).to_string(index=False)
             )
         else:
-            print(metrics_df.head(10))
+            print(metrics_df.head(5))
 
+        report_metrics = (
+            training_runner.family_comparison_metrics_df
+        )
+        if report_metrics.empty:
+            report_metrics = metrics_df
+        elif "evaluation_scope" in report_metrics.columns:
+            report_metrics = report_metrics[
+                report_metrics["evaluation_scope"].eq("overall")
+            ].copy()
 
         visualizer = TrainingMetricsVisualizer(
-            metrics_df=metrics_df,
-            predictions_dir=self.paths.root_dir / "training" /"predictions",
-            output_dir=self.paths.root_dir / "training" / "figures"
+            metrics_df=report_metrics,
+            predictions_dir=(
+                self.paths.root_dir
+                / "training"
+                / "predictions"
+            ),
+            output_dir=self.paths.root_dir / "training" / "figures",
+            ranking_df=training_runner.source_selection_df,
         )
 
         visualizer.generate_best_models_report(
@@ -382,4 +396,3 @@ class HUPAExperimentRunner:
             return value
 
         return str(value)
-

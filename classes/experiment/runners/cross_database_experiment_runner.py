@@ -328,10 +328,21 @@ class CrossDatabaseExperimentRunner:
         )
         metrics = training_runner.run()
 
+        report_metrics = (
+            training_runner.family_comparison_metrics_df
+        )
+        if report_metrics.empty:
+            report_metrics = metrics
+        elif "evaluation_scope" in report_metrics.columns:
+            report_metrics = report_metrics[
+                report_metrics["evaluation_scope"].eq("overall")
+            ].copy()
+
         visualizer = TrainingMetricsVisualizer(
-            metrics_df=metrics,
+            metrics_df=report_metrics,
             predictions_dir=output_dir / "predictions",
             output_dir=output_dir / "figures",
+            ranking_df=training_runner.source_selection_df,
         )
         visualizer.generate_best_models_report(
             best_metric="balanced_accuracy"
@@ -368,9 +379,10 @@ class CrossDatabaseExperimentRunner:
             "selection_note": (
                 "Feature scenario, model family, preprocessing, and "
                 "hyperparameters are selected exclusively by grouped "
-                "cross-validation on the source database. Only the "
-                "selected refitted pipeline is evaluated on the "
-                "destination database."
+                "cross-validation on the source database. The global "
+                "champion is the primary result; training-CV-selected "
+                "SVM and MLP champions form a prespecified secondary "
+                "comparison on the destination database."
             ),
             "domain_shift_note": (
                 "Results include clinical generalization and domain "

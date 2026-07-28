@@ -34,8 +34,17 @@ from classes.experiment.training.classification_metrics import (
 from classes.experiment.training.compute_backend_runtime import (
     ensure_compute_backend_ready,
 )
+from classes.experiment.training.experimental_protocol_writer import (
+    ExperimentalProtocolWriter,
+)
+from classes.experiment.training.grouped_svm_learning_curve_runner import (
+    GroupedSVMLearningCurveRunner,
+)
 from classes.experiment.training.host_array_converter import (
     HostArrayConverter,
+)
+from classes.experiment.training.model_selection_policy import (
+    ModelSelectionPolicy,
 )
 from classes.experiment.training.training_config import TrainingConfig
 from classes.experiment.training.training_plan import (
@@ -129,6 +138,8 @@ class ModelTrainingRunner:
         self.external_test_features_df = external_test_features_df
         self.train_dataset_name = train_dataset_name
         self.test_dataset_name = test_dataset_name
+        self.source_selection_df = pd.DataFrame()
+        self.family_comparison_metrics_df = pd.DataFrame()
 
         self.models_dir = self.output_dir / "models"
         self.metrics_dir = self.output_dir / "metrics"
@@ -137,8 +148,18 @@ class ModelTrainingRunner:
         self.training_curves_dir = (
             self.output_dir / "figures" / "training_curves"
         )
+        self.learning_curves_dir = (
+            self.output_dir / "figures" / "learning_curves"
+        )
 
         self._create_output_dirs()
+        self.protocol_hash = ExperimentalProtocolWriter(
+            output_dir=self.output_dir,
+        ).write(
+            config=self.config,
+            feature_scenarios=self.feature_scenarios,
+            model_specs=self.model_specs,
+        )
 
         cache_location = (
             self.output_dir / ".pipeline_cache"
@@ -298,7 +319,7 @@ class ModelTrainingRunner:
         strata_train: pd.Series | None,
         evaluation_mode: str,
     ) -> pd.DataFrame:
-        """Select on training CV, then evaluate one model on held-out data."""
+        """Evaluate a primary model and a prespecified family comparison."""
         candidates: list[SourceSelectionCandidate] = []
         candidate_order = 0
 
@@ -372,16 +393,17 @@ class ModelTrainingRunner:
                 "non-finite cross-validation score."
             )
 
-        selected = max(
-            eligible_candidates,
-            key=lambda candidate: (
-                float(candidate.grid.best_score_),
-                -candidate.order,
-            ),
+        selected, global_selection_threshold = (
+            self._select_source_candidate(
+                eligible_candidates
+            )
         )
-        self._save_source_selection_results(
+        self.source_selection_df = self._save_source_selection_results(
             candidates=candidates,
             selected=selected,
+            global_selection_threshold=(
+                global_selection_threshold
+            ),
         )
 
         print(
@@ -390,37 +412,51 @@ class ModelTrainingRunner:
             f"\n  model: {selected.model_spec.name}"
             f"\n  CV {self.config.scoring}: "
             f"{selected.grid.best_score_:.4f}"
+            f"\n  global one-SE threshold: "
+            f"{global_selection_threshold:.4f}"
         )
 
         best_model = selected.grid.best_estimator_
-        self._save_training_curves(
-            model=best_model,
-            scenario_name=selected.scenario.name,
-            model_name=selected.model_spec.name,
-            X_train=split.X_train[selected.feature_cols],
-            y_train=split.y_train,
-            groups_train=groups_train,
-            strata_train=strata_train,
-        )
-        mlp_candidates = [
-            candidate
-            for candidate in eligible_candidates
-            if candidate.model_spec.name.lower() == "mlp"
-        ]
 
-        if mlp_candidates and selected.model_spec.name.lower() != "mlp":
-            best_mlp = max(
-                mlp_candidates,
-                key=lambda candidate: (
-                    float(candidate.grid.best_score_),
-                    -candidate.order,
-                ),
+        if self.config.run_repeated_nested_cv:
+            self._run_repeated_nested_cv(
+                X_train=split.X_train,
+                y_train=split.y_train,
+                meta_train=split.meta_train,
+                numeric_cols=numeric_cols,
+                groups_train=groups_train,
+                strata_train=strata_train,
             )
+
+        if (
+            self.config.run_grouped_svm_learning_curve
+            and selected.model_spec.name.startswith("svm_")
+        ):
+            self._save_grouped_svm_learning_curve(
+                model=best_model,
+                scenario_name=selected.scenario.name,
+                model_name=selected.model_spec.name,
+                X_train=split.X_train[selected.feature_cols],
+                y_train=split.y_train,
+                groups_train=groups_train,
+                strata_train=strata_train,
+            )
+
+        comparison_candidates = (
+            self._select_family_comparison_candidates(
+                candidates=eligible_candidates,
+            )
+        )
+        curve_candidates = list(comparison_candidates)
+        if selected not in curve_candidates:
+            curve_candidates.append(selected)
+
+        for candidate in curve_candidates:
             self._save_training_curves(
-                model=best_mlp.grid.best_estimator_,
-                scenario_name=best_mlp.scenario.name,
-                model_name=best_mlp.model_spec.name,
-                X_train=split.X_train[best_mlp.feature_cols],
+                model=candidate.grid.best_estimator_,
+                scenario_name=candidate.scenario.name,
+                model_name=candidate.model_spec.name,
+                X_train=split.X_train[candidate.feature_cols],
                 y_train=split.y_train,
                 groups_train=groups_train,
                 strata_train=strata_train,
@@ -442,6 +478,19 @@ class ModelTrainingRunner:
             ),
             evaluation_mode=evaluation_mode,
         )
+        for metric_row in metrics:
+            metric_row["best_cv_score_std"] = float(
+                selected.grid.best_score_std_
+            )
+            metric_row["mean_train_cv_score"] = float(
+                selected.grid.best_train_score_
+            )
+            metric_row["train_cv_generalization_gap"] = float(
+                selected.grid.generalization_gap_
+            )
+            metric_row["global_selection_threshold"] = float(
+                global_selection_threshold
+            )
 
         if self.config.save_models:
             self._save_model(
@@ -450,13 +499,212 @@ class ModelTrainingRunner:
                 model_name=selected.model_spec.name,
             )
 
+        self.family_comparison_metrics_df = (
+            self._evaluate_family_comparison(
+                candidates=comparison_candidates,
+                primary=selected,
+                primary_metrics=metrics,
+                split=split,
+                evaluation_mode=evaluation_mode,
+                global_selection_threshold=(
+                    global_selection_threshold
+                ),
+            )
+        )
+        self._print_strict_evaluation_summary(
+            primary_metrics=pd.DataFrame(metrics),
+            family_comparison_metrics=(
+                self.family_comparison_metrics_df
+            ),
+        )
+
         return pd.DataFrame(metrics)
+
+    @staticmethod
+    def _print_strict_evaluation_summary(
+        primary_metrics: pd.DataFrame,
+        family_comparison_metrics: pd.DataFrame,
+    ) -> None:
+        display_columns = [
+            "comparison_role",
+            "scenario",
+            "model",
+            "balanced_accuracy",
+            "macro_f1",
+            "mcc",
+            "auc",
+        ]
+
+        primary_overall = primary_metrics
+        if "evaluation_scope" in primary_overall.columns:
+            primary_overall = primary_overall[
+                primary_overall["evaluation_scope"].eq("overall")
+            ]
+
+        primary_columns = [
+            column
+            for column in display_columns
+            if column in primary_overall.columns
+        ]
+        print("\nPrimary holdout/external evaluation:")
+        print(
+            primary_overall[primary_columns].to_string(
+                index=False
+            )
+        )
+
+        if family_comparison_metrics.empty:
+            return
+
+        comparison_overall = family_comparison_metrics
+        if "evaluation_scope" in comparison_overall.columns:
+            comparison_overall = comparison_overall[
+                comparison_overall[
+                    "evaluation_scope"
+                ].eq("overall")
+            ]
+
+        comparison_columns = [
+            column
+            for column in display_columns
+            if column in comparison_overall.columns
+        ]
+        print(
+            "\nPrespecified secondary SVM vs MLP comparison "
+            "(families selected by training CV):"
+        )
+        print(
+            comparison_overall[comparison_columns].to_string(
+                index=False
+            )
+        )
+
+    @staticmethod
+    def _model_family(model_name: str) -> str | None:
+        normalized = model_name.lower()
+
+        if normalized.startswith("svm"):
+            return "svm"
+
+        if "mlp" in normalized:
+            return "mlp"
+
+        return None
+
+    def _select_family_comparison_candidates(
+        self,
+        candidates: list[SourceSelectionCandidate],
+    ) -> list[SourceSelectionCandidate]:
+        """Choose one SVM and one MLP using training CV only."""
+        selected_by_family: dict[str, SourceSelectionCandidate] = {}
+
+        for family in ("svm", "mlp"):
+            family_candidates = [
+                candidate
+                for candidate in candidates
+                if self._model_family(candidate.model_spec.name) == family
+            ]
+            if family_candidates:
+                family_best, _ = self._select_source_candidate(
+                    family_candidates
+                )
+                selected_by_family[family] = family_best
+
+        return [
+            selected_by_family[family]
+            for family in ("svm", "mlp")
+            if family in selected_by_family
+        ]
+
+    def _evaluate_family_comparison(
+        self,
+        candidates: list[SourceSelectionCandidate],
+        primary: SourceSelectionCandidate,
+        primary_metrics: list[dict[str, Any]],
+        split: TrainingDataSplit,
+        evaluation_mode: str,
+        global_selection_threshold: float,
+    ) -> pd.DataFrame:
+        if len(candidates) < 2:
+            return pd.DataFrame()
+
+        comparison_rows: list[dict[str, Any]] = []
+
+        for candidate in candidates:
+            if candidate is primary:
+                candidate_metrics = [
+                    metric.copy()
+                    for metric in primary_metrics
+                ]
+            else:
+                candidate_metrics = self._evaluate_with_subgroups(
+                    model=candidate.grid.best_estimator_,
+                    model_name=candidate.model_spec.name,
+                    scenario_name=candidate.scenario.name,
+                    feature_cols=candidate.feature_cols,
+                    X_test=split.X_test[candidate.feature_cols],
+                    y_test=split.y_test,
+                    meta_test=split.meta_test,
+                    n_train_samples=len(split.y_train),
+                    best_cv_score=candidate.grid.best_score_,
+                    best_params=candidate.grid.best_params_,
+                    training_time_seconds=(
+                        candidate.training_time_seconds
+                    ),
+                    evaluation_mode=evaluation_mode,
+                )
+
+                if self.config.save_models:
+                    self._save_model(
+                        model=candidate.grid.best_estimator_,
+                        scenario_name=candidate.scenario.name,
+                        model_name=candidate.model_spec.name,
+                    )
+
+            for metric_row in candidate_metrics:
+                metric_row["model_family"] = self._model_family(
+                    candidate.model_spec.name
+                )
+                metric_row["comparison_role"] = (
+                    "primary_global_and_family_champion"
+                    if candidate is primary
+                    else "secondary_family_champion"
+                )
+                metric_row["selected_for_primary_evaluation"] = (
+                    candidate is primary
+                )
+                metric_row["best_cv_score_std"] = float(
+                    candidate.grid.best_score_std_
+                )
+                metric_row["mean_train_cv_score"] = float(
+                    candidate.grid.best_train_score_
+                )
+                metric_row["train_cv_generalization_gap"] = float(
+                    candidate.grid.generalization_gap_
+                )
+                metric_row["global_selection_threshold"] = float(
+                    global_selection_threshold
+                )
+
+            comparison_rows.extend(candidate_metrics)
+
+        comparison_df = pd.DataFrame(comparison_rows)
+        comparison_df.to_csv(
+            self.metrics_dir / "family_comparison_metrics.csv",
+            index=False,
+        )
+        comparison_df.to_parquet(
+            self.metrics_dir / "family_comparison_metrics.parquet",
+            index=False,
+        )
+        return comparison_df
 
     def _save_source_selection_results(
         self,
         candidates: list[SourceSelectionCandidate],
         selected: SourceSelectionCandidate,
-    ) -> None:
+        global_selection_threshold: float,
+    ) -> pd.DataFrame:
         rows = []
 
         for candidate in candidates:
@@ -465,8 +713,31 @@ class ModelTrainingRunner:
                 "model": candidate.model_spec.name,
                 "n_features": len(candidate.feature_cols),
                 "selection_metric": self.config.scoring,
+                "protocol_version": self.config.protocol_version,
+                "protocol_hash": self.protocol_hash,
+                "eligible_for_final_reporting": (
+                    self.config.eligible_for_final_reporting
+                ),
                 "best_cv_score": float(
                     candidate.grid.best_score_
+                ),
+                "best_cv_score_std": float(
+                    candidate.grid.best_score_std_
+                ),
+                "numerical_best_cv_score": float(
+                    candidate.grid.numerical_best_score_
+                ),
+                "selection_threshold_within_model": float(
+                    candidate.grid.selection_threshold_
+                ),
+                "global_selection_threshold": float(
+                    global_selection_threshold
+                ),
+                "mean_train_score": float(
+                    candidate.grid.best_train_score_
+                ),
+                "train_cv_generalization_gap": float(
+                    candidate.grid.generalization_gap_
                 ),
                 "best_params": str(candidate.grid.best_params_),
                 "training_time_seconds": float(
@@ -474,6 +745,19 @@ class ModelTrainingRunner:
                 ),
                 "selected_for_evaluation": (
                     candidate is selected
+                ),
+                "eligible_under_global_one_se": (
+                    float(candidate.grid.best_score_)
+                    >= global_selection_threshold
+                ),
+                "complexity_key": str(
+                    ModelSelectionPolicy
+                    .source_candidate_complexity_key(
+                        n_input_features=len(
+                            candidate.feature_cols
+                        ),
+                        best_params=candidate.grid.best_params_,
+                    )
                 ),
                 "candidate_order": candidate.order,
             })
@@ -499,6 +783,357 @@ class ModelTrainingRunner:
             self.metrics_dir / "source_model_selection.parquet",
             index=False,
         )
+        return selection_df
+
+    def _select_source_candidate(
+        self,
+        candidates: list[SourceSelectionCandidate],
+    ) -> tuple[SourceSelectionCandidate, float]:
+        if not candidates:
+            raise ValueError(
+                "At least one source candidate is required."
+            )
+
+        numerical_best = max(
+            candidates,
+            key=lambda candidate: (
+                float(candidate.grid.numerical_best_score_),
+                -candidate.order,
+            ),
+        )
+        allowed_drop = max(
+            float(
+                numerical_best.grid.selection_standard_error_
+            ),
+            self.config.selection_score_tolerance,
+        )
+        threshold = (
+            float(numerical_best.grid.numerical_best_score_)
+            - allowed_drop
+        )
+        eligible = [
+            candidate
+            for candidate in candidates
+            if float(candidate.grid.best_score_) >= threshold
+        ]
+
+        if not eligible:
+            eligible = [numerical_best]
+
+        selected = min(
+            eligible,
+            key=lambda candidate: (
+                float(candidate.grid.best_score_std_),
+                abs(float(candidate.grid.generalization_gap_)),
+                ModelSelectionPolicy.source_candidate_complexity_key(
+                    n_input_features=len(candidate.feature_cols),
+                    best_params=candidate.grid.best_params_,
+                ),
+                -float(candidate.grid.best_score_),
+                candidate.order,
+            ),
+        )
+        return selected, float(threshold)
+
+    def _run_repeated_nested_cv(
+        self,
+        X_train: pd.DataFrame,
+        y_train: pd.Series,
+        meta_train: pd.DataFrame,
+        numeric_cols: list[str],
+        groups_train: pd.Series | None,
+        strata_train: pd.Series | None,
+    ) -> None:
+        print(
+            "\nRunning repeated nested grouped CV exclusively on the "
+            "source training partition..."
+        )
+        X = X_train.reset_index(drop=True)
+        y = y_train.reset_index(drop=True)
+        metadata = meta_train.reset_index(drop=True)
+        groups = (
+            groups_train.reset_index(drop=True)
+            if groups_train is not None
+            else pd.Series(
+                np.arange(len(y)),
+                name="synthetic_group",
+            )
+        )
+        strata = (
+            strata_train.reset_index(drop=True)
+            if strata_train is not None
+            else y
+        )
+        result_rows: list[dict[str, Any]] = []
+        assignment_rows: list[dict[str, Any]] = []
+
+        for repeat in range(self.config.nested_cv_repeats):
+            outer_seed = self.config.random_state + repeat
+            outer_splits = self._build_inner_cv_splits(
+                X_train=X,
+                y_train=y,
+                groups_train=groups,
+                strata_train=strata,
+                n_splits=self.config.nested_cv_folds,
+                random_state=outer_seed,
+                split_name="nested outer CV",
+            )
+
+            for outer_fold, (
+                outer_fit_indices,
+                outer_validation_indices,
+            ) in enumerate(outer_splits):
+                print(
+                    "\nNested CV repeat "
+                    f"{repeat + 1}/{self.config.nested_cv_repeats}, "
+                    "outer fold "
+                    f"{outer_fold + 1}/{self.config.nested_cv_folds}"
+                )
+                candidates: list[SourceSelectionCandidate] = []
+                candidate_order = 0
+
+                for scenario in self.feature_scenarios:
+                    feature_cols = self._select_feature_columns(
+                        scenario=scenario,
+                        numeric_cols=numeric_cols,
+                    )
+
+                    if not feature_cols:
+                        continue
+
+                    for model_spec in self.model_specs:
+                        started_at = perf_counter()
+                        grid = self._run_grid_search(
+                            model_spec=model_spec,
+                            X_train=X.iloc[
+                                outer_fit_indices
+                            ][feature_cols],
+                            y_train=y.iloc[outer_fit_indices],
+                            groups_train=groups.iloc[
+                                outer_fit_indices
+                            ],
+                            strata_train=strata.iloc[
+                                outer_fit_indices
+                            ],
+                        )
+                        candidates.append(
+                            SourceSelectionCandidate(
+                                scenario=scenario,
+                                model_spec=model_spec,
+                                feature_cols=feature_cols,
+                                grid=grid,
+                                training_time_seconds=(
+                                    perf_counter() - started_at
+                                ),
+                                order=candidate_order,
+                            )
+                        )
+                        candidate_order += 1
+
+                eligible_candidates = [
+                    candidate
+                    for candidate in candidates
+                    if np.isfinite(
+                        float(candidate.grid.best_score_)
+                    )
+                ]
+
+                if not eligible_candidates:
+                    raise RuntimeError(
+                        "Nested CV could not select a finite source "
+                        "candidate."
+                    )
+
+                selected, selection_threshold = (
+                    self._select_source_candidate(
+                        eligible_candidates
+                    )
+                )
+                model = selected.grid.best_estimator_
+                X_outer_fit = X.iloc[
+                    outer_fit_indices
+                ][selected.feature_cols]
+                X_outer_validation = X.iloc[
+                    outer_validation_indices
+                ][selected.feature_cols]
+                train_prediction = model.predict(X_outer_fit)
+                validation_prediction = model.predict(
+                    X_outer_validation
+                )
+                validation_score = self._get_model_score(
+                    model,
+                    X_outer_validation,
+                )
+                metrics = (
+                    ClassificationMetrics.compute_binary_metrics(
+                        y_true=y.iloc[
+                            outer_validation_indices
+                        ].to_numpy(),
+                        y_pred=validation_prediction,
+                        y_score=validation_score,
+                    )
+                )
+                train_balanced_accuracy = (
+                    balanced_accuracy_score(
+                        y.iloc[outer_fit_indices],
+                        train_prediction,
+                    )
+                )
+                metrics.update({
+                    "protocol_version": self.config.protocol_version,
+                    "protocol_hash": self.protocol_hash,
+                    "eligible_for_final_reporting": (
+                        self.config.eligible_for_final_reporting
+                    ),
+                    "repeat": repeat,
+                    "outer_fold": outer_fold,
+                    "outer_seed": outer_seed,
+                    "scenario": selected.scenario.name,
+                    "model": selected.model_spec.name,
+                    "n_input_features": len(
+                        selected.feature_cols
+                    ),
+                    "n_outer_train_samples": len(
+                        outer_fit_indices
+                    ),
+                    "n_outer_validation_samples": len(
+                        outer_validation_indices
+                    ),
+                    "n_outer_train_groups": groups.iloc[
+                        outer_fit_indices
+                    ].nunique(),
+                    "n_outer_validation_groups": groups.iloc[
+                        outer_validation_indices
+                    ].nunique(),
+                    "inner_cv_score": float(
+                        selected.grid.best_score_
+                    ),
+                    "inner_cv_score_std": float(
+                        selected.grid.best_score_std_
+                    ),
+                    "inner_train_score": float(
+                        selected.grid.best_train_score_
+                    ),
+                    "inner_train_cv_gap": float(
+                        selected.grid.generalization_gap_
+                    ),
+                    "outer_train_balanced_accuracy": float(
+                        train_balanced_accuracy
+                    ),
+                    "outer_generalization_gap": float(
+                        train_balanced_accuracy
+                        - metrics["balanced_accuracy"]
+                    ),
+                    "selection_threshold": float(
+                        selection_threshold
+                    ),
+                    "best_params": str(
+                        selected.grid.best_params_
+                    ),
+                })
+                result_rows.append(metrics)
+
+                for partition, indices in (
+                    ("outer_train", outer_fit_indices),
+                    (
+                        "outer_validation",
+                        outer_validation_indices,
+                    ),
+                ):
+                    for index in indices:
+                        assignment_rows.append({
+                            "repeat": repeat,
+                            "outer_fold": outer_fold,
+                            "source_index": int(index),
+                            "sample_id": (
+                                metadata.iloc[index].get(
+                                    "sample_id",
+                                    index,
+                                )
+                            ),
+                            "group": groups.iloc[index],
+                            "target": int(y.iloc[index]),
+                            "stratum": strata.iloc[index],
+                            "partition": partition,
+                        })
+
+                pd.DataFrame(result_rows).to_csv(
+                    self.metrics_dir
+                    / "repeated_nested_cv_results.csv",
+                    index=False,
+                )
+                pd.DataFrame(assignment_rows).to_csv(
+                    self.splits_dir
+                    / "repeated_nested_cv_assignments.csv",
+                    index=False,
+                )
+
+        results = pd.DataFrame(result_rows)
+        results.to_csv(
+            self.metrics_dir / "repeated_nested_cv_results.csv",
+            index=False,
+        )
+        results.to_parquet(
+            self.metrics_dir / "repeated_nested_cv_results.parquet",
+            index=False,
+        )
+        pd.DataFrame(assignment_rows).to_csv(
+            self.splits_dir
+            / "repeated_nested_cv_assignments.csv",
+            index=False,
+        )
+
+        summary_metrics = (
+            "accuracy",
+            "balanced_accuracy",
+            "macro_f1",
+            "mcc",
+            "auc",
+            "pr_auc",
+            "outer_train_balanced_accuracy",
+            "outer_generalization_gap",
+        )
+        summary_rows = []
+
+        for metric_name in summary_metrics:
+            values = pd.to_numeric(
+                results[metric_name],
+                errors="coerce",
+            ).dropna()
+            summary_rows.append({
+                "metric": metric_name,
+                "mean": float(values.mean()),
+                "std": float(values.std(ddof=1)),
+                "minimum": float(values.min()),
+                "maximum": float(values.max()),
+                "n_outer_folds": len(values),
+            })
+
+        pd.DataFrame(summary_rows).to_csv(
+            self.metrics_dir / "repeated_nested_cv_summary.csv",
+            index=False,
+        )
+        stability = (
+            results.groupby(
+                ["scenario", "model", "best_params"],
+                dropna=False,
+            )
+            .size()
+            .rename("selection_count")
+            .reset_index()
+            .sort_values(
+                "selection_count",
+                ascending=False,
+            )
+        )
+        stability["selection_frequency"] = (
+            stability["selection_count"] / len(results)
+        )
+        stability.to_csv(
+            self.metrics_dir
+            / "repeated_nested_cv_selection_stability.csv",
+            index=False,
+        )
 
     def _create_output_dirs(self) -> None:
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -507,6 +1142,10 @@ class ModelTrainingRunner:
         self.predictions_dir.mkdir(parents=True, exist_ok=True)
         self.splits_dir.mkdir(parents=True, exist_ok=True)
         self.training_curves_dir.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+        self.learning_curves_dir.mkdir(
             parents=True,
             exist_ok=True,
         )
@@ -1072,14 +1711,34 @@ class ModelTrainingRunner:
             f"CV fits: {candidate_count * len(cv_splits)}"
         )
 
+        selection_result = None
+
+        def select_parsimonious_candidate(
+            cv_results: dict[str, Any],
+        ) -> int:
+            nonlocal selection_result
+            selection_result = (
+                ModelSelectionPolicy.select_grid_candidate(
+                    mean_scores=cv_results["mean_test_score"],
+                    std_scores=cv_results["std_test_score"],
+                    params=cv_results["params"],
+                    model_name=model_spec.name,
+                    cv_folds=len(cv_splits),
+                    minimum_score_tolerance=(
+                        self.config.selection_score_tolerance
+                    ),
+                )
+            )
+            return selection_result.selected_index
+
         grid = GridSearchCV(
             estimator=pipeline,
             param_grid=model_spec.param_grid,
             scoring=self.config.scoring,
             cv=cv_splits,
             n_jobs=self.config.n_jobs,
-            refit=True,
-            return_train_score=False,
+            refit=select_parsimonious_candidate,
+            return_train_score=True,
             verbose=self.config.grid_search_verbose,
         )
 
@@ -1099,8 +1758,51 @@ class ModelTrainingRunner:
             **fit_parameters,
         )
 
-        print(f"\nBest CV score: {grid.best_score_:.4f}")
-        print(f"Best parameters: {grid.best_params_}")
+        if selection_result is None:
+            raise RuntimeError(
+                "Grid search did not execute the parsimonious refit "
+                "policy."
+            )
+
+        selected_index = int(grid.best_index_)
+        grid.best_score_ = float(
+            grid.cv_results_["mean_test_score"][selected_index]
+        )
+        grid.best_score_std_ = float(
+            grid.cv_results_["std_test_score"][selected_index]
+        )
+        grid.best_train_score_ = float(
+            grid.cv_results_["mean_train_score"][selected_index]
+        )
+        grid.generalization_gap_ = float(
+            grid.best_train_score_ - grid.best_score_
+        )
+        grid.numerical_best_index_ = int(
+            selection_result.numerical_best_index
+        )
+        grid.numerical_best_score_ = float(
+            selection_result.numerical_best_score
+        )
+        grid.selection_threshold_ = float(
+            selection_result.selection_threshold
+        )
+        grid.selection_standard_error_ = float(
+            selection_result.standard_error
+        )
+
+        print(
+            "\nNumerical best CV score: "
+            f"{grid.numerical_best_score_:.4f}"
+            "\nParsimonious CV score: "
+            f"{grid.best_score_:.4f}"
+            "\nSelection threshold: "
+            f"{grid.selection_threshold_:.4f}"
+            "\nMean training score: "
+            f"{grid.best_train_score_:.4f}"
+            "\nTraining-CV gap: "
+            f"{grid.generalization_gap_:.4f}"
+        )
+        print(f"Selected parameters: {grid.best_params_}")
 
         return grid
 
@@ -1110,7 +1812,20 @@ class ModelTrainingRunner:
         y_train: pd.Series,
         groups_train: pd.Series | None,
         strata_train: pd.Series | None = None,
+        n_splits: int | None = None,
+        random_state: int | None = None,
+        split_name: str = "inner CV",
     ) -> list[tuple[np.ndarray, np.ndarray]]:
+        effective_n_splits = (
+            self.config.cv_folds
+            if n_splits is None
+            else n_splits
+        )
+        effective_random_state = (
+            self.config.random_state
+            if random_state is None
+            else random_state
+        )
         split_target = (
             strata_train
             if strata_train is not None
@@ -1119,23 +1834,23 @@ class ModelTrainingRunner:
 
         if groups_train is None:
             splitter = StratifiedKFold(
-                n_splits=self.config.cv_folds,
+                n_splits=effective_n_splits,
                 shuffle=True,
-                random_state=self.config.random_state,
+                random_state=effective_random_state,
             )
             splits = list(splitter.split(X_train, split_target))
         else:
-            if groups_train.nunique() < self.config.cv_folds:
+            if groups_train.nunique() < effective_n_splits:
                 raise ValueError(
-                    "Not enough training groups for grouped cross-"
+                    f"Not enough training groups for {split_name}: "
                     f"validation: groups={groups_train.nunique()}, "
-                    f"folds={self.config.cv_folds}."
+                    f"folds={effective_n_splits}."
                 )
 
             splitter = StratifiedGroupKFold(
-                n_splits=self.config.cv_folds,
+                n_splits=effective_n_splits,
                 shuffle=True,
-                random_state=self.config.random_state,
+                random_state=effective_random_state,
             )
             splits = list(
                 splitter.split(
@@ -1156,7 +1871,8 @@ class ModelTrainingRunner:
                 or validation_target.nunique() != 2
             ):
                 raise ValueError(
-                    f"Inner CV fold {fold_index} does not contain both "
+                    f"{split_name} fold {fold_index} does not contain "
+                    "both "
                     "classes in fit and validation partitions."
                 )
 
@@ -1172,7 +1888,7 @@ class ModelTrainingRunner:
                     or validation_strata != required_strata
                 ):
                     raise ValueError(
-                        f"Inner CV fold {fold_index} does not contain "
+                        f"{split_name} fold {fold_index} does not contain "
                         "all configured database/class strata."
                     )
 
@@ -1184,7 +1900,7 @@ class ModelTrainingRunner:
 
                 if fit_groups & validation_groups:
                     raise RuntimeError(
-                        f"Speaker leakage found in inner CV fold "
+                        f"Speaker leakage found in {split_name} fold "
                         f"{fold_index}."
                     )
 
@@ -1378,6 +2094,11 @@ class ModelTrainingRunner:
         metrics.update(intervals)
 
         metrics["scenario"] = scenario_name
+        metrics["protocol_version"] = self.config.protocol_version
+        metrics["protocol_hash"] = self.protocol_hash
+        metrics["eligible_for_final_reporting"] = (
+            self.config.eligible_for_final_reporting
+        )
         metrics["model"] = model_name
         metrics["n_features"] = len(feature_cols)
         metrics["n_train_samples"] = int(n_train_samples)
@@ -1534,6 +2255,53 @@ class ModelTrainingRunner:
         )
 
         joblib.dump(model, output_path)
+
+    def _save_grouped_svm_learning_curve(
+        self,
+        model: Pipeline,
+        scenario_name: str,
+        model_name: str,
+        X_train: pd.DataFrame,
+        y_train: pd.Series,
+        groups_train: pd.Series | None,
+        strata_train: pd.Series | None,
+    ) -> None:
+        print("\nBuilding speaker-grouped SVM learning curve...")
+        effective_groups = (
+            groups_train.reset_index(drop=True)
+            if groups_train is not None
+            else pd.Series(
+                np.arange(len(y_train)),
+                name="synthetic_group",
+            )
+        )
+        y = y_train.reset_index(drop=True)
+        X = X_train.reset_index(drop=True)
+        strata = (
+            strata_train.reset_index(drop=True)
+            if strata_train is not None
+            else y
+        )
+        cv_splits = self._build_inner_cv_splits(
+            X_train=X,
+            y_train=y,
+            groups_train=effective_groups,
+            strata_train=strata,
+        )
+        GroupedSVMLearningCurveRunner(
+            config=self.config,
+            learning_curves_dir=self.learning_curves_dir,
+            splits_dir=self.splits_dir,
+        ).run(
+            model=model,
+            scenario_name=scenario_name,
+            model_name=model_name,
+            X=X,
+            y=y,
+            groups=effective_groups,
+            strata=strata,
+            cv_splits=cv_splits,
+        )
 
     def _save_training_curves(
         self,

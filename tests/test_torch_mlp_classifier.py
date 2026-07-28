@@ -42,6 +42,7 @@ class TorchMLPClassifierTests(unittest.TestCase):
             module=TorchMLPModule,
             module__hidden_layer_sizes=(4,),
             criterion=nn.CrossEntropyLoss,
+            criterion__label_smoothing=0.1,
             optimizer=optim.Adam,
             max_epochs=1,
             batch_size=-1,
@@ -71,6 +72,10 @@ class TorchMLPClassifierTests(unittest.TestCase):
             estimator.criterion_.weight.detach().numpy(),
             np.array([2.0 / 3.0, 2.0]),
             rtol=1e-6,
+        )
+        self.assertEqual(
+            estimator.criterion_.label_smoothing,
+            0.1,
         )
         self.assertEqual(
             estimator.predict_proba(features).shape,

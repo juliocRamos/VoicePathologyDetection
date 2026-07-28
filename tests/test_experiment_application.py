@@ -70,6 +70,21 @@ class ExperimentConfigFactoryTests(unittest.TestCase):
         self.assertTrue(configs.svd_manifest.adults_only)
         self.assertEqual(configs.svd_manifest.vowels, ("a",))
         self.assertEqual(configs.svd_manifest.conditions, ("n",))
+        self.assertTrue(
+            configs.training.run_grouped_svm_learning_curve
+        )
+        self.assertTrue(
+            configs.training.run_repeated_nested_cv
+        )
+        self.assertEqual(configs.training.nested_cv_folds, 3)
+        self.assertEqual(configs.training.nested_cv_repeats, 2)
+        self.assertEqual(
+            configs.training.protocol_version,
+            "gpu_confirmatory_v2",
+        )
+        self.assertTrue(
+            configs.training.eligible_for_final_reporting
+        )
 
 
 class ExperimentRunnerFactoryTests(unittest.TestCase):
