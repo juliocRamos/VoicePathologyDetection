@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
 from classes.experiment.application.experiment_application import (
     ExperimentApplication,
@@ -14,6 +15,9 @@ from classes.experiment.application.experiment_request import (
 )
 from classes.experiment.application.experiment_settings import (
     ExperimentSettings,
+)
+from classes.experiment.runners.cross_database_direction import (
+    CrossDatabaseDirection,
 )
 from classes.experiment.runners.experiment_stage import ExperimentStage
 from classes.experiment.training.compute_backend import ComputeBackend
@@ -50,9 +54,9 @@ def parse_arguments() -> argparse.Namespace:
         choices=[dataset.value for dataset in ExperimentDataset],
         required=True,
         help=(
-            "Experiment to execute. 'cross' runs HUPA->SVD and "
-            "SVD->HUPA. 'pooled' mixes both databases with a "
-            "speaker-disjoint holdout."
+            "Experiment to execute. 'cross' supports one or both "
+            "database directions. 'pooled' mixes both databases with "
+            "a speaker-disjoint holdout."
         ),
     )
     parser.add_argument(
@@ -78,6 +82,57 @@ def parse_arguments() -> argparse.Namespace:
         help=(
             "Backend used during model training. "
             "CUDA requires requirements-gpu.txt."
+        ),
+    )
+    parser.add_argument(
+        "--svd-vowels",
+        nargs="+",
+        choices=("a", "i", "u"),
+        default=("a",),
+        help=(
+            "Sustained vowels included in the SVD cohort. The default "
+            "keeps the original /a/-only protocol. Use "
+            "'--svd-vowels a i u' for the multivowel extension."
+        ),
+    )
+    parser.add_argument(
+        "--cross-direction",
+        choices=[
+            direction.value
+            for direction in CrossDatabaseDirection
+        ],
+        default=CrossDatabaseDirection.BOTH.value,
+        help=(
+            "Cross-database direction to execute. The default 'both' "
+            "preserves the original bidirectional protocol."
+        ),
+    )
+    parser.add_argument(
+        "--resume-experiment",
+        type=Path,
+        default=None,
+        help=(
+            "Existing experiment root to resume. Persisted features, "
+            "model-selection results, and completed nested-CV folds are "
+            "validated and reused instead of recomputed."
+        ),
+    )
+    parser.add_argument(
+        "--hupa-source-experiment",
+        type=Path,
+        default=None,
+        help=(
+            "Completed HUPA experiment whose persisted features should "
+            "be reused by a new cross or pooled experiment."
+        ),
+    )
+    parser.add_argument(
+        "--svd-source-experiment",
+        type=Path,
+        default=None,
+        help=(
+            "Completed SVD experiment whose persisted features should "
+            "be reused by a new cross or pooled experiment."
         ),
     )
     return parser.parse_args()

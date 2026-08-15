@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 from pathlib import Path
 
@@ -8,6 +8,9 @@ import pandas as pd
 
 from classes.experiment.path_manager.experiment_paths import (
     ExperimentPaths,
+)
+from classes.experiment.runners.cross_database_direction import (
+    CrossDatabaseDirection,
 )
 from classes.experiment.runners.experiment_stage import ExperimentStage
 from classes.experiment.runners.hupa_experiment_runner import (
@@ -36,22 +39,39 @@ class CrossDatabaseExperimentRunner:
         data_root: str | Path,
         experiment_name: str,
         training_config: TrainingConfig,
+        direction: CrossDatabaseDirection = (
+            CrossDatabaseDirection.BOTH
+        ),
+        experiment_root: str | Path | None = None,
     ) -> None:
         self.hupa_runner = hupa_runner
         self.svd_runner = svd_runner
         self.data_root = Path(data_root)
         self.experiment_name = experiment_name
         self.training_config = training_config
-        self.paths = ExperimentPaths.create(
-            data_root=self.data_root,
-            dataset_name="CROSS_DATABASE",
-            experiment_name=self.experiment_name,
+        self.direction = direction
+        self.resume = experiment_root is not None
+        self.paths = (
+            ExperimentPaths.open_existing(
+                root_dir=experiment_root,
+                dataset_name="CROSS_DATABASE",
+                experiment_name=self.experiment_name,
+            )
+            if experiment_root is not None
+            else ExperimentPaths.create(
+                data_root=self.data_root,
+                dataset_name="CROSS_DATABASE",
+                experiment_name=self.experiment_name,
+            )
         )
 
     def run(
         self,
         stage: ExperimentStage = ExperimentStage.PREPARE,
     ) -> pd.DataFrame | None:
+        if self.resume:
+            self._validate_resume_config()
+
         source_stage = (
             ExperimentStage.FEATURES
             if stage.includes_feature_extraction
@@ -82,19 +102,20 @@ class CrossDatabaseExperimentRunner:
                 "databases."
             )
 
+        features_by_database = {
+            "HUPA": hupa_features,
+            "SVD": svd_features,
+        }
         results = [
             self._run_direction(
-                train_features=hupa_features,
-                test_features=svd_features,
-                train_database="HUPA",
-                test_database="SVD",
-            ),
-            self._run_direction(
-                train_features=svd_features,
-                test_features=hupa_features,
-                train_database="SVD",
-                test_database="HUPA",
-            ),
+                train_features=features_by_database[train_database],
+                test_features=features_by_database[test_database],
+                train_database=train_database,
+                test_database=test_database,
+            )
+            for train_database, test_database in (
+                self.direction.database_pairs()
+            )
         ]
         metrics = pd.concat(results, ignore_index=True)
 
@@ -114,6 +135,59 @@ class CrossDatabaseExperimentRunner:
             f"{self.paths.root_dir}"
         )
         return metrics
+
+    def _validate_resume_config(self) -> None:
+        if not self.paths.config_path.is_file():
+            raise FileNotFoundError(
+                "Cross-database resume config is missing: "
+                f"{self.paths.config_path}"
+            )
+
+        persisted = json.loads(
+            self.paths.config_path.read_text(encoding="utf-8")
+        )
+        persisted_direction = persisted.get("cross_direction")
+
+        if persisted_direction is None:
+            persisted_pairs = frozenset({
+                (
+                    item.get("train_database"),
+                    item.get("test_database"),
+                )
+                for item in persisted.get("directions", [])
+            })
+            direction_by_pairs = {
+                frozenset(direction.database_pairs()): direction.value
+                for direction in CrossDatabaseDirection
+            }
+            persisted_direction = direction_by_pairs.get(
+                persisted_pairs
+            )
+
+        checks = {
+            "cross_direction": self.direction.value,
+            "hupa_experiment_root": str(
+                self.hupa_runner.paths.root_dir
+            ),
+            "svd_experiment_root": str(
+                self.svd_runner.paths.root_dir
+            ),
+        }
+        actual = {
+            "cross_direction": persisted_direction,
+            "hupa_experiment_root": persisted.get(
+                "hupa_experiment_root"
+            ),
+            "svd_experiment_root": persisted.get(
+                "svd_experiment_root"
+            ),
+        }
+
+        if actual != checks:
+            raise ValueError(
+                "Cross-database resume configuration does not match "
+                f"the request: expected={checks}, persisted={actual}."
+            )
 
     @classmethod
     def save_cohort_comparison(
@@ -311,20 +385,45 @@ class CrossDatabaseExperimentRunner:
             f"\n  test: {test_database}"
         )
 
+        source_training_config = (
+            self.svd_runner.training_config
+            if train_database == "SVD"
+            else self.hupa_runner.training_config
+        )
+        test_vowels = (
+            test_features["vowel"]
+            .dropna()
+            .astype("string")
+            .drop_duplicates()
+            if "vowel" in test_features.columns
+            else pd.Series(dtype="string")
+        )
+
+        direction_config = replace(
+            source_training_config,
+            evaluation_subgroup_col=(
+                "vowel"
+                if test_database == "SVD"
+                and len(test_vowels) > 1
+                else None
+            ),
+        )
+
         training_runner = ModelTrainingRunner(
             features_df=train_features,
             external_test_features_df=test_features,
             train_dataset_name=train_database,
             test_dataset_name=test_database,
             output_dir=output_dir,
-            config=self.training_config,
+            config=direction_config,
             feature_scenarios=(
                 TrainingPlan.default_feature_scenarios()
             ),
             model_specs=TrainingPlan.default_model_specs(
-                random_state=self.training_config.random_state,
-                compute_backend=self.training_config.compute_backend,
+                random_state=direction_config.random_state,
+                compute_backend=direction_config.compute_backend,
             ),
+            resume=self.resume,
         )
         metrics = training_runner.run()
 
@@ -354,15 +453,15 @@ class CrossDatabaseExperimentRunner:
             "dataset_name": "CROSS_DATABASE",
             "experiment_name": self.experiment_name,
             "stage": stage.value,
+            "cross_direction": self.direction.value,
             "directions": [
                 {
-                    "train_database": "HUPA",
-                    "test_database": "SVD",
-                },
-                {
-                    "train_database": "SVD",
-                    "test_database": "HUPA",
-                },
+                    "train_database": train_database,
+                    "test_database": test_database,
+                }
+                for train_database, test_database in (
+                    self.direction.database_pairs()
+                )
             ],
             "hupa_experiment_root": str(
                 self.hupa_runner.paths.root_dir
@@ -371,10 +470,24 @@ class CrossDatabaseExperimentRunner:
                 self.svd_runner.paths.root_dir
             ),
             "training_config": asdict(self.training_config),
+            "direction_protocol_versions": {
+                f"{train_database}->{test_database}": (
+                    self.svd_runner.training_config.protocol_version
+                    if train_database == "SVD"
+                    else self.hupa_runner.training_config.protocol_version
+                )
+                for train_database, test_database in (
+                    self.direction.database_pairs()
+                )
+            },
+            "svd_manifest_config": asdict(
+                self.svd_runner.manifest_config
+            ),
             "cohort_note": (
                 "Only adults with valid age are included in both "
-                "databases. Sustained vowel /a/ at normal condition is "
-                "used in SVD so that its vocal task matches HUPA."
+                "databases. SVD uses sustained vowel(s) "
+                f"{', '.join(self.svd_runner.manifest_config.vowels)} "
+                "at normal condition; HUPA uses sustained vowel /a/."
             ),
             "selection_note": (
                 "Feature scenario, model family, preprocessing, and "

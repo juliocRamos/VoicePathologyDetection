@@ -25,6 +25,22 @@ class ExperimentPathsTests(unittest.TestCase):
             self.assertTrue(paths.manifests_dir.exists())
             self.assertTrue(paths.reports_dir.exists())
 
+    def test_opens_existing_experiment_without_new_timestamp(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "existing"
+            root.mkdir()
+
+            paths = ExperimentPaths.open_existing(
+                root_dir=root,
+                dataset_name="SVD",
+                experiment_name="resume",
+            )
+
+            self.assertEqual(paths.root_dir, root.resolve())
+            self.assertTrue(paths.features_dir.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

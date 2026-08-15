@@ -22,10 +22,14 @@ class GroupedSVMLearningCurveRunner:
         config: TrainingConfig,
         learning_curves_dir: str | Path,
         splits_dir: str | Path,
+        resume: bool = False,
+        protocol_hash: str | None = None,
     ) -> None:
         self.config = config
         self.learning_curves_dir = Path(learning_curves_dir)
         self.splits_dir = Path(splits_dir)
+        self.resume = resume
+        self.protocol_hash = protocol_hash
 
     def run(
         self,
@@ -38,8 +42,23 @@ class GroupedSVMLearningCurveRunner:
         strata: pd.Series,
         cv_splits: list[tuple[np.ndarray, np.ndarray]],
     ) -> None:
-        records: list[dict[str, Any]] = []
-        assignment_records: list[dict[str, Any]] = []
+        file_stem = (
+            f"{scenario_name}_{model_name}_grouped_learning_curve"
+        )
+        curve_path = (
+            self.learning_curves_dir / f"{file_stem}.csv"
+        )
+        assignments_path = (
+            self.splits_dir / f"{file_stem}_assignments.csv"
+        )
+        records, assignment_records = self._load_checkpoint(
+            curve_path=curve_path,
+            assignments_path=assignments_path,
+        )
+        completed = {
+            (int(row["fold"]), float(row["train_fraction"]))
+            for row in records
+        }
 
         for fold_index, (
             fold_fit_indices,
@@ -52,6 +71,15 @@ class GroupedSVMLearningCurveRunner:
             for train_fraction in (
                 self.config.learning_curve_train_sizes
             ):
+                identity = (fold_index, float(train_fraction))
+                if identity in completed:
+                    print(
+                        "Resume checkpoint: skipping grouped learning "
+                        f"curve fold={fold_index}, "
+                        f"train_fraction={train_fraction}."
+                    )
+                    continue
+
                 selected_fit_indices = self._select_fit_indices(
                     candidate_indices=fold_fit_indices,
                     groups=groups,
@@ -93,6 +121,7 @@ class GroupedSVMLearningCurveRunner:
                     validation_prediction,
                 )
                 records.append({
+                    "protocol_hash": self.protocol_hash,
                     "fold": fold_index,
                     "train_fraction": float(train_fraction),
                     "n_train_samples": len(selected_fit_indices),
@@ -130,6 +159,15 @@ class GroupedSVMLearningCurveRunner:
                         partition="curve_validation",
                     )
                 )
+                pd.DataFrame(records).to_csv(
+                    curve_path,
+                    index=False,
+                )
+                pd.DataFrame(assignment_records).to_csv(
+                    assignments_path,
+                    index=False,
+                )
+                completed.add(identity)
 
         curve_df = pd.DataFrame(records)
         summary = (
@@ -159,21 +197,14 @@ class GroupedSVMLearningCurveRunner:
                 ),
             )
         )
-        file_stem = (
-            f"{scenario_name}_{model_name}_grouped_learning_curve"
-        )
-        curve_df.to_csv(
-            self.learning_curves_dir / f"{file_stem}.csv",
-            index=False,
-        )
+        curve_df.to_csv(curve_path, index=False)
         summary.to_csv(
             self.learning_curves_dir
             / f"{file_stem}_summary.csv",
             index=False,
         )
         pd.DataFrame(assignment_records).to_csv(
-            self.splits_dir / f"{file_stem}_assignments.csv",
-            index=False,
+            assignments_path, index=False
         )
         GroupedLearningCurveVisualizer.save(
             summary=summary,
@@ -184,6 +215,54 @@ class GroupedSVMLearningCurveRunner:
                 "Speaker-grouped learning curve — "
                 f"{scenario_name} / {model_name}"
             ),
+        )
+
+    def _load_checkpoint(
+        self,
+        curve_path: Path,
+        assignments_path: Path,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        if not self.resume:
+            return [], []
+        if not curve_path.exists() and not assignments_path.exists():
+            return [], []
+        if not curve_path.is_file() or not assignments_path.is_file():
+            raise ValueError(
+                "Grouped learning-curve resume requires both result "
+                "and assignment checkpoints."
+            )
+
+        curve = pd.read_csv(curve_path)
+        assignments = pd.read_csv(assignments_path)
+        required = {
+            "protocol_hash",
+            "fold",
+            "train_fraction",
+        }
+        missing = required - set(curve.columns)
+        if missing:
+            raise ValueError(
+                "Grouped learning-curve checkpoint is missing columns: "
+                f"{sorted(missing)}"
+            )
+        if set(curve["protocol_hash"]) != {self.protocol_hash}:
+            raise ValueError(
+                "Grouped learning-curve checkpoint protocol hash does "
+                "not match the active protocol."
+            )
+        if curve.duplicated(["fold", "train_fraction"]).any():
+            raise ValueError(
+                "Grouped learning-curve checkpoint contains duplicate "
+                "fold/fraction rows."
+            )
+
+        print(
+            "\nResume checkpoint: restored "
+            f"{len(curve)} grouped learning-curve fits."
+        )
+        return (
+            curve.to_dict(orient="records"),
+            assignments.to_dict(orient="records"),
         )
 
     @staticmethod
@@ -216,28 +295,31 @@ class GroupedSVMLearningCurveRunner:
             "group": groups.iloc[candidate_indices].to_numpy(),
             "stratum": strata.iloc[candidate_indices].to_numpy(),
         })
-        group_strata_counts = (
-            candidate_frame.groupby("group")["stratum"].nunique()
-        )
-
-        if (group_strata_counts > 1).any():
-            raise ValueError(
-                "Each speaker group must belong to one stratum when "
-                "building a learning curve."
-            )
-
         group_frame = (
-            candidate_frame[["group", "stratum"]]
-            .drop_duplicates()
-            .reset_index(drop=True)
+            candidate_frame.groupby(
+                "group",
+                sort=False,
+                dropna=False,
+            )["stratum"]
+            .agg(
+                lambda values: tuple(
+                    sorted({
+                        str(value)
+                        for value in values
+                    })
+                )
+            )
+            .rename("stratum")
+            .reset_index()
         )
 
         if train_fraction >= 1.0:
             return np.sort(candidate_indices)
 
-        number_of_strata = group_frame["stratum"].nunique()
+        required_sample_strata = set(candidate_frame["stratum"])
+        number_of_group_strata = group_frame["stratum"].nunique()
         requested_groups = max(
-            number_of_strata,
+            number_of_group_strata,
             round(len(group_frame) * train_fraction),
         )
 
@@ -296,7 +378,10 @@ class GroupedSVMLearningCurveRunner:
             "index",
         ].to_numpy(dtype=int)
 
-        if strata.iloc[selected_indices].nunique() != number_of_strata:
+        selected_sample_strata = set(
+            strata.iloc[selected_indices]
+        )
+        if selected_sample_strata != required_sample_strata:
             raise RuntimeError(
                 "Learning-curve subset lost a required stratum."
             )

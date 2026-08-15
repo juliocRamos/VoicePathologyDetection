@@ -41,6 +41,7 @@ class PooledDatabaseExperimentRunner:
         data_root: str | Path,
         experiment_name: str,
         training_config: TrainingConfig,
+        experiment_root: str | Path | None = None,
     ) -> None:
         self.hupa_runner = hupa_runner
         self.svd_runner = svd_runner
@@ -53,10 +54,19 @@ class PooledDatabaseExperimentRunner:
             stratify_col="base",
             evaluation_subgroup_col="base",
         )
-        self.paths = ExperimentPaths.create(
-            data_root=self.data_root,
-            dataset_name="POOLED",
-            experiment_name=self.experiment_name,
+        self.resume = experiment_root is not None
+        self.paths = (
+            ExperimentPaths.open_existing(
+                root_dir=experiment_root,
+                dataset_name="POOLED",
+                experiment_name=self.experiment_name,
+            )
+            if experiment_root is not None
+            else ExperimentPaths.create(
+                data_root=self.data_root,
+                dataset_name="POOLED",
+                experiment_name=self.experiment_name,
+            )
         )
 
     def run(
@@ -123,6 +133,7 @@ class PooledDatabaseExperimentRunner:
             ),
             train_dataset_name="HUPA+SVD",
             test_dataset_name="HUPA+SVD",
+            resume=self.resume,
         )
         metrics = training_runner.run()
 
@@ -221,10 +232,64 @@ class PooledDatabaseExperimentRunner:
             pooled.groupby(self.POOLED_GROUP_COLUMN)["label"]
             .nunique()
         )
+        mixed_label_groups = set(
+            label_counts[label_counts.gt(1)].index
+        )
+        mixed_rows = pooled[
+            pooled[self.POOLED_GROUP_COLUMN].isin(
+                mixed_label_groups
+            )
+        ]
+        report_columns = [
+            self.POOLED_GROUP_COLUMN,
+            "base",
+            "speaker_id",
+            "n_samples",
+            "labels",
+            "healthy_samples",
+            "pathological_samples",
+        ]
+        report_records = []
+        for group_id, group_rows in mixed_rows.groupby(
+            self.POOLED_GROUP_COLUMN,
+            sort=True,
+        ):
+            labels = group_rows["label"].astype("string")
+            report_records.append({
+                self.POOLED_GROUP_COLUMN: group_id,
+                "base": group_rows["base"].iloc[0],
+                "speaker_id": group_rows["speaker_id"].iloc[0],
+                "n_samples": len(group_rows),
+                "labels": "|".join(sorted(labels.unique())),
+                "healthy_samples": int(labels.eq("healthy").sum()),
+                "pathological_samples": int(
+                    labels.eq("pathological").sum()
+                ),
+            })
 
-        if label_counts.gt(1).any():
-            raise ValueError(
-                "A pooled speaker group contains conflicting labels."
+        mixed_label_report = pd.DataFrame(
+            report_records,
+            columns=report_columns,
+        )
+        mixed_label_report.to_csv(
+            self.paths.reports_dir
+            / "pooled_mixed_label_groups.csv",
+            index=False,
+        )
+        mixed_label_report.to_parquet(
+            self.paths.reports_dir
+            / "pooled_mixed_label_groups.parquet",
+            index=False,
+        )
+
+        if mixed_label_groups:
+            print(
+                "\nPooled cohort note:"
+                f"\n  mixed-label speaker groups: "
+                f"{len(mixed_label_groups)}"
+                f"\n  affected samples: {len(mixed_rows)}"
+                "\n  policy: keep every speaker group wholly within "
+                "one partition."
             )
 
         return pooled

@@ -1,9 +1,16 @@
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
 
 import pandas as pd
 
 from classes.experiment.runners.cross_database_experiment_runner import (
     CrossDatabaseExperimentRunner,
+)
+from classes.experiment.runners.cross_database_direction import (
+    CrossDatabaseDirection,
 )
 from main import (
     build_hupa_manifest_config,
@@ -14,6 +21,21 @@ from main import (
 
 
 class CrossDatabaseCohortTests(unittest.TestCase):
+    def test_direction_selects_only_requested_database_pair(
+        self,
+    ) -> None:
+        self.assertEqual(
+            CrossDatabaseDirection.SVD_TO_HUPA.database_pairs(),
+            (("SVD", "HUPA"),),
+        )
+        self.assertEqual(
+            CrossDatabaseDirection.BOTH.database_pairs(),
+            (
+                ("HUPA", "SVD"),
+                ("SVD", "HUPA"),
+            ),
+        )
+
     def test_both_cross_database_cohorts_are_adult_only(self) -> None:
         hupa_config = build_cross_hupa_manifest_config()
         svd_config = build_cross_svd_manifest_config()
@@ -35,6 +57,58 @@ class CrossDatabaseCohortTests(unittest.TestCase):
         self.assertEqual(svd_config.minimum_age, 18.0)
         self.assertEqual(svd_config.vowels, ("a",))
         self.assertEqual(svd_config.conditions, ("n",))
+
+    def test_cross_svd_cohort_accepts_multivowel_extension(
+        self,
+    ) -> None:
+        svd_config = build_cross_svd_manifest_config(
+            vowels=("a", "i", "u"),
+        )
+
+        self.assertEqual(svd_config.vowels, ("a", "i", "u"))
+        self.assertEqual(svd_config.conditions, ("n",))
+
+    def test_cross_resume_rejects_a_different_direction(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.json"
+            config_path.write_text(
+                json.dumps({
+                    "cross_direction": "svd-to-hupa",
+                    "hupa_experiment_root": "/runs/hupa",
+                    "svd_experiment_root": "/runs/svd",
+                    "directions": [{
+                        "train_database": "SVD",
+                        "test_database": "HUPA",
+                    }],
+                }),
+                encoding="utf-8",
+            )
+            runner = CrossDatabaseExperimentRunner.__new__(
+                CrossDatabaseExperimentRunner
+            )
+            runner.paths = SimpleNamespace(
+                config_path=config_path
+            )
+            runner.hupa_runner = SimpleNamespace(
+                paths=SimpleNamespace(
+                    root_dir=Path("/runs/hupa")
+                )
+            )
+            runner.svd_runner = SimpleNamespace(
+                paths=SimpleNamespace(
+                    root_dir=Path("/runs/svd")
+                )
+            )
+            runner.direction = CrossDatabaseDirection.BOTH
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "does not match",
+            ):
+                runner._validate_resume_config()
 
     def test_cross_database_cohort_rejects_invalid_ages(self) -> None:
         cohort = pd.DataFrame({

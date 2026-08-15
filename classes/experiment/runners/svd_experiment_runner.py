@@ -51,6 +51,7 @@ class SVDExperimentRunner:
         feature_config=None,
         manifest_config: SVDTrainingManifestConfig | None = None,
         training_config: TrainingConfig | None = None,
+        experiment_root: str | Path | None = None,
     ):
         self.dataset_root = Path(dataset_root)
         self.data_root = Path(data_root)
@@ -66,16 +67,28 @@ class SVDExperimentRunner:
             or TrainingConfig(group_col="speaker_id")
         )
 
-        self.paths = ExperimentPaths.create(
-            data_root=self.data_root,
-            dataset_name="SVD",
-            experiment_name=self.experiment_name,
+        self.resume = experiment_root is not None
+        self.paths = (
+            ExperimentPaths.open_existing(
+                root_dir=experiment_root,
+                dataset_name="SVD",
+                experiment_name=self.experiment_name,
+            )
+            if experiment_root is not None
+            else ExperimentPaths.create(
+                data_root=self.data_root,
+                dataset_name="SVD",
+                experiment_name=self.experiment_name,
+            )
         )
 
     def run(
         self,
         stage: ExperimentStage = ExperimentStage.PREPARE,
     ) -> pd.DataFrame | None:
+        if self.resume:
+            return self._run_resumed(stage=stage)
+
         self.save_config(stage=stage)
 
         raw_manifest = self.build_manifest()
@@ -108,6 +121,84 @@ class SVDExperimentRunner:
 
         print(f"\nSVD experiment saved in:\n{self.paths.root_dir}")
         return features_df
+
+    def _run_resumed(
+        self,
+        stage: ExperimentStage,
+    ) -> pd.DataFrame | None:
+        self._validate_resume_config()
+        feature_path = (
+            self.paths.features_dir / "svd_features_v1.parquet"
+        )
+
+        if not stage.includes_feature_extraction:
+            raise ValueError(
+                "Resume requires --stage features or --stage train."
+            )
+        if not feature_path.is_file():
+            raise FileNotFoundError(
+                f"Resume feature checkpoint is missing: {feature_path}"
+            )
+
+        print(f"Resuming SVD experiment from:\n{self.paths.root_dir}")
+        features_df = pd.read_parquet(feature_path)
+
+        if stage.includes_training:
+            self.train_models(features_df, resume=True)
+
+        return features_df
+
+    def _validate_resume_config(self) -> None:
+        if not self.paths.config_path.is_file():
+            raise FileNotFoundError(
+                f"Resume config is missing: {self.paths.config_path}"
+            )
+
+        persisted = json.loads(
+            self.paths.config_path.read_text(encoding="utf-8")
+        )
+        checks = {
+            "dataset_name": "SVD",
+            "protocol_version": (
+                self.training_config.protocol_version
+            ),
+            "compute_backend": (
+                self.training_config.compute_backend.value
+            ),
+            "random_state": self.training_config.random_state,
+            "vowels": list(self.manifest_config.vowels),
+            "conditions": list(self.manifest_config.conditions),
+            "evaluation_subgroup_col": (
+                self.training_config.evaluation_subgroup_col
+            ),
+        }
+        actual = {
+            "dataset_name": persisted.get("dataset_name"),
+            "protocol_version": persisted.get(
+                "training_config", {}
+            ).get("protocol_version"),
+            "compute_backend": persisted.get(
+                "training_config", {}
+            ).get("compute_backend"),
+            "random_state": persisted.get(
+                "training_config", {}
+            ).get("random_state"),
+            "vowels": persisted.get(
+                "manifest_config", {}
+            ).get("vowels"),
+            "conditions": persisted.get(
+                "manifest_config", {}
+            ).get("conditions"),
+            "evaluation_subgroup_col": persisted.get(
+                "training_config", {}
+            ).get("evaluation_subgroup_col"),
+        }
+
+        if actual != checks:
+            raise ValueError(
+                "Resume configuration does not match the requested "
+                f"protocol: expected={checks}, persisted={actual}."
+            )
 
     def save_config(self, stage: ExperimentStage) -> None:
         config_data = {
@@ -274,6 +365,7 @@ class SVDExperimentRunner:
     def train_models(
         self,
         features_df: pd.DataFrame,
+        resume: bool = False,
     ) -> pd.DataFrame:
         print("\n[6/6] Training SVD models...")
 
@@ -288,6 +380,7 @@ class SVDExperimentRunner:
             config=self.training_config,
             feature_scenarios=feature_scenarios,
             model_specs=model_specs,
+            resume=resume,
         )
         metrics_df = training_runner.run()
 

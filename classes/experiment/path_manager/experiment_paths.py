@@ -52,6 +52,28 @@ class ExperimentPaths:
 
         return paths
 
+    @classmethod
+    def open_existing(
+        cls,
+        root_dir: str | Path,
+        dataset_name: str,
+        experiment_name: str,
+    ) -> "ExperimentPaths":
+        root = Path(root_dir).resolve()
+
+        if not root.is_dir():
+            raise FileNotFoundError(
+                f"Resume experiment root does not exist: {root}"
+            )
+
+        paths = cls(
+            root_dir=root,
+            dataset_name=dataset_name,
+            experiment_name=experiment_name,
+        )
+        paths.make_dirs()
+        return paths
+
     @property
     def manifests_dir(self) -> Path:
         return self.root_dir / "manifests"
