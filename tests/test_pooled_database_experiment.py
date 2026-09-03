@@ -80,9 +80,14 @@ class PooledDatabaseExperimentTests(unittest.TestCase):
                     save_split_assignments=True,
                 ),
             )
+            svd = self._database_rows("SVD")
+            svd.loc[
+                svd["sample_id"].eq("SVD-0-1"),
+                ["label", "pathology"],
+            ] = ["pathological", "pathological"]
             pooled = pooled_runner._build_pooled_features(
                 hupa_features=self._database_rows("HUPA"),
-                svd_features=self._database_rows("SVD"),
+                svd_features=svd,
             )
 
             self.assertIn("mfcc_shared", pooled.columns)
@@ -92,6 +97,21 @@ class PooledDatabaseExperimentTests(unittest.TestCase):
                 pooled["database_speaker_id"]
                 .str.startswith(("HUPA::", "SVD::"))
                 .all()
+            )
+            mixed_label_report = pd.read_csv(
+                pooled_runner.paths.reports_dir
+                / "pooled_mixed_label_groups.csv"
+            )
+            self.assertEqual(len(mixed_label_report), 1)
+            self.assertEqual(
+                mixed_label_report.iloc[0][
+                    "database_speaker_id"
+                ],
+                "SVD::speaker-0",
+            )
+            self.assertEqual(
+                mixed_label_report.iloc[0]["n_samples"],
+                2,
             )
 
             output_dir = data_root / "pooled_training"

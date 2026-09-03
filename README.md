@@ -52,6 +52,36 @@ Select the last stage explicitly when extracting features or training:
 .venv/bin/python main.py --dataset pooled --stage train --compute-backend cuda
 ```
 
+New cross/pooled runs can reuse already validated feature artifacts
+instead of preprocessing and extracting both databases again:
+
+```bash
+.venv/bin/python main.py \
+  --dataset cross \
+  --stage train \
+  --compute-backend cuda \
+  --hupa-source-experiment data/HUPA/experiments/<run-directory> \
+  --svd-source-experiment data/SVD/experiments/<run-directory>
+```
+
+Interrupted feature/training runs can be resumed in the same experiment
+directory:
+
+```bash
+.venv/bin/python main.py \
+  --dataset svd \
+  --stage train \
+  --compute-backend cuda \
+  --resume-experiment data/SVD/experiments/<run-directory>
+```
+
+Resume mode validates the persisted configuration and protocol hash,
+reuses extracted features and completed model-selection candidates,
+skips completed repeated nested-CV folds, and checkpoints every grouped
+SVM learning-curve fit. A completed `metrics.csv` makes the resumed
+training stage idempotent. Cross and pooled runs also reuse their
+persisted source experiment roots and per-direction training outputs.
+
 These four commands provide five comparable protocols. All use adults,
 the sustained vowel `/a/`, and normal SVD phonation:
 
@@ -63,10 +93,11 @@ the sustained vowel `/a/`, and normal SVD phonation:
 5. HUPA + SVD -> grouped mixed holdout, reported globally and per database
 ```
 
-Only CUDA executions under `gpu_confirmatory_v2` are eligible for the
-final paper. CPU support remains available for development but uses a
-different MLP implementation and must not be mixed with confirmatory
-results. The complete rationale is recorded in
+CUDA executions under `gpu_confirmatory_v2` provide the original
+confirmatory results. The complementary multivowel analysis uses
+`gpu_multivowel_extension_v1`. CPU support remains available for
+development but uses a different MLP implementation and must not be
+mixed with CUDA results. The complete rationale is recorded in
 `EXPERIMENTAL_PROTOCOL.md`.
 
 A detailed, code-aligned description of data loading, cohort
@@ -94,7 +125,8 @@ training–CV gap, and fewer selected features. A minimum balanced-
 accuracy tolerance of `0.005` prevents negligible score differences
 from selecting a more complex pipeline.
 
-The `cross` command executes both external-validation directions:
+By default, the `cross` command executes both external-validation
+directions:
 
 ```text
 HUPA -> grouped CV selects one pipeline -> refit HUPA -> test once on SVD
@@ -110,6 +142,39 @@ feature selector. Training-only candidate rankings are saved as
 the prespecified SVM-versus-MLP analysis is saved separately as
 `family_comparison_metrics.csv`. Cross-database artifacts are written
 below `data/CROSS_DATABASE/experiments/`.
+
+The optional multivowel SVD extension keeps only normal phonation while
+including `/a/`, `/i/`, and `/u/`:
+
+```bash
+.venv/bin/python main.py \
+  --dataset svd \
+  --stage train \
+  --compute-backend cuda \
+  --svd-vowels a i u \
+  --experiment-name svd_multivowel_gpu_confirmatory_v2
+```
+
+Its holdout remains speaker-disjoint and reports `overall`, `vowel:a`,
+`vowel:i`, `vowel:u`, and `vowel:macro` metric rows. A directional
+cross-database follow-up can reuse that completed SVD feature source
+and an existing HUPA feature source:
+
+```bash
+.venv/bin/python main.py \
+  --dataset cross \
+  --stage train \
+  --compute-backend cuda \
+  --svd-vowels a i u \
+  --cross-direction svd-to-hupa \
+  --hupa-source-experiment data/HUPA/experiments/<run-directory> \
+  --svd-source-experiment data/SVD/experiments/<multivowel-run-directory> \
+  --experiment-name svd_multivowel_to_hupa_gpu_confirmatory_v2
+```
+
+The original `/a/`-only cohort and bidirectional cross protocol remain
+the defaults. Resume validation rejects a source experiment whose SVD
+vowel cohort differs from the requested configuration.
 
 The default training protocol also runs repeated nested grouped CV only
 on the source training partition (`3` outer folds × `2` repetitions,

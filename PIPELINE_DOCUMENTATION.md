@@ -1,22 +1,32 @@
 # Documentação técnica do pipeline experimental
 
+> Estado consolidado em 2 de agosto de 2026. Os cinco experimentos com a
+> vogal /a/ e as duas extensões multivogais descritas neste documento foram
+> concluídos. As seções finais distinguem resultados executados de propostas
+> para trabalhos futuros.
+
 ## 1. Objetivo e escopo
 
 Este documento descreve o fluxo implementado para detecção binária de
 patologia vocal, desde a descoberta dos arquivos nas bases HUPA e SVD
-até a avaliação dos modelos. A descrição corresponde ao código atual e
-ao protocolo confirmatório `gpu_confirmatory_v2`.
+até a avaliação dos modelos. A descrição corresponde ao código atual,
+ao protocolo confirmatório `gpu_confirmatory_v2` e à extensão
+`gpu_multivowel_extension_v1`.
 
 O objetivo clínico-computacional é classificar cada amostra como:
 
 - `healthy` (`target = 0`);
 - `pathological` (`target = 1`).
 
-O desenho experimental foi construído para responder duas perguntas:
+O desenho experimental foi construído para responder quatro perguntas:
 
 1. O modelo generaliza para locutores não vistos da mesma base?
 2. O modelo treinado em uma base é transportável para outra base, com
    idioma, equipamento, população e protocolo de aquisição diferentes?
+3. O treinamento conjunto com HUPA e SVD produz comportamento equilibrado
+   quando as duas origens são conhecidas?
+4. A inclusão das vogais /i/ e /u/ no treinamento da SVD melhora a
+   generalização interna ou a transferência para a vogal /a/ da HUPA?
 
 O fluxo completo é:
 
@@ -25,7 +35,7 @@ linha de comando
     -> configuração centralizada e resolvida do experimento
     -> indexação dos arquivos e metadados
     -> manifesto bruto
-    -> aplicação das regras de coorte e deduplicação
+    -> aplicação das regras de elegibilidade e deduplicação
     -> manifesto de treinamento auditável
     -> leitura e pré-processamento de cada sinal
     -> extração de atributos acústicos
@@ -44,7 +54,7 @@ As principais implementações estão distribuídas entre:
 | Configuração canônica | `classes/experiment/application/experiment_config_factory.py` |
 | Adaptação da HUPA | `classes/dataset/adapters/hupa_adapter.py` |
 | Adaptação da SVD | `classes/dataset/adapters/svd_adapter.py` |
-| Definição das coortes | `classes/dataset/preparation/*_training_manifest_builder.py` |
+| Formação dos conjuntos de amostras | `classes/dataset/preparation/*_training_manifest_builder.py` |
 | Leitura do áudio | `classes/audio_sample/audio_loader/audio_file_reader.py` |
 | Pré-processamento | `classes/audio_sample/audio_loader/preprocessing/audio_preprocessor.py` |
 | Extração dos atributos | `classes/vpd/vpd_feature_extractor.py` |
@@ -63,11 +73,22 @@ O argumento `--dataset` escolhe o protocolo:
 .venv/bin/python main.py --dataset pooled --stage train --compute-backend cuda
 ```
 
+A extensão multivogal da SVD é solicitada explicitamente, preservando
+`/a/` como padrão:
+
+```bash
+.venv/bin/python main.py --dataset svd --stage train \
+  --compute-backend cuda --svd-vowels a i u
+.venv/bin/python main.py --dataset cross --stage train \
+  --compute-backend cuda --svd-vowels a i u \
+  --cross-direction svd-to-hupa
+```
+
 O argumento `--stage` representa o último estágio executado:
 
 | Estágio | Operações executadas |
 |---|---|
-| `prepare` | indexação, manifesto bruto, coorte, deduplicação, perfil e figuras |
+| `prepare` | indexação, manifesto bruto, elegibilidade, deduplicação, perfil e figuras |
 | `features` | tudo de `prepare` mais pré-processamento e extração de atributos |
 | `train` | pipeline completo, incluindo seleção, treino e avaliação |
 
@@ -99,6 +120,28 @@ data/<BASE>/experiments/<timestamp>_<base>_<nome_do_experimento>/
 
 Isso evita a sobrescrita silenciosa de artefatos de execuções anteriores.
 
+Execuções interbases e mistas podem reutilizar atributos de experimentos de
+origem já validados:
+
+```bash
+.venv/bin/python main.py --dataset cross --stage train \
+  --compute-backend cuda \
+  --hupa-source-experiment data/HUPA/experiments/<execucao-hupa> \
+  --svd-source-experiment data/SVD/experiments/<execucao-svd>
+```
+
+Uma execução interrompida pode continuar no mesmo diretório:
+
+```bash
+.venv/bin/python main.py --dataset svd --stage train \
+  --compute-backend cuda \
+  --resume-experiment data/SVD/experiments/<execucao-interrompida>
+```
+
+O modo de retomada valida a configuração persistida e o hash do protocolo
+antes de reutilizar atributos ou checkpoints. A existência de um
+`metrics.csv` completo torna o estágio de treinamento idempotente.
+
 ## 3. Manifestos: separação entre fatos e decisões experimentais
 
 O pipeline mantém dois níveis de manifesto.
@@ -122,8 +165,8 @@ uma decisão experimental”.
 
 ### 3.2. Manifesto de treinamento
 
-O `TrainingManifestBuilder` transforma o manifesto bruto em uma coorte
-adequada ao experimento. Ele gera simultaneamente:
+O `TrainingManifestBuilder` transforma o manifesto bruto em um conjunto de
+amostras adequado ao experimento. Ele gera simultaneamente:
 
 - o manifesto de treinamento;
 - a relação de amostras excluídas, com motivo primário e detalhe;
@@ -135,6 +178,14 @@ regras são aplicadas em ordem, o que torna as contagens reproduzíveis.
 Os artefatos são salvos em CSV e, quando aplicável, Parquet.
 
 ## 4. Carregamento e preparação da HUPA
+
+A base original reúne 440 participantes falantes do espanhol castelhano,
+sendo 239 controles e 201 pacientes com alterações orgânicas da voz. A
+aquisição foi realizada em sala tratada, com uma estação Kay Elemetrics CSL
+4300B e microfone Shure SM48. Os sinais originais foram digitalizados a 50
+kHz e 16 bits. A cópia segmentada efetivamente recebida pelo projeto contém
+440 arquivos WAV mono, PCM de 16 bits e 25 kHz; essa distinção entre aquisição
+e distribuição deve ser preservada no texto.
 
 ### 4.1. Indexação do áudio
 
@@ -183,7 +234,7 @@ que dois arquivos acusticamente diferentes pertencem a pessoas
 diferentes. Caso um identificador clínico real se torne disponível, ele
 deve substituir essa suposição.
 
-### 4.4. Regras da coorte HUPA
+### 4.4. Regras do conjunto HUPA
 
 Na configuração atual, permanecem apenas amostras que:
 
@@ -199,6 +250,14 @@ de maturação vocal em vez de patologia.
 
 ## 5. Carregamento e preparação da SVD
 
+A documentação da SVD reporta 2.043 participantes, incluindo 687 controles,
+1.356 pacientes e 71 categorias diagnósticas. O material inclui /a/, /i/ e
+/u/ em condições de frequência fundamental normal, baixa, alta e variável,
+além de uma frase padronizada. A cópia local contém 30.020 arquivos NSP
+indexados. O pipeline utiliza apenas o canal acústico; sinais
+eletroglotográficos eventualmente presentes no formato não entram nos
+atributos.
+
 ### 5.1. Indexação do áudio
 
 O adaptador procura diretórios que contenham `overview.csv`. Cada nome
@@ -213,7 +272,7 @@ Os nomes de vogais sustentadas seguem o padrão:
 
 São reconhecidas as vogais `a`, `i` e `u` e as condições `h`, `l`,
 `lhl` e `n`. A sequência `iau` também pode ser indexada no manifesto
-bruto, mas não entra na coorte atual.
+bruto, mas não entra no conjunto de amostras atual.
 
 O ID presente no nome do arquivo é comparado ao ID da pasta. Diferenças
 são relatadas como diagnóstico. O rótulo `healthy` é atribuído somente
@@ -240,9 +299,9 @@ Duplicatas de metadados com a mesma chave
 conteúdo clínico for idêntico. Se houver qualquer conflito relevante, a
 execução falha. A junção áudio-metadado é validada como `many_to_one`.
 
-### 5.3. Regras da coorte SVD
+### 5.3. Regras do conjunto SVD
 
-Na configuração atual, permanecem apenas:
+Na configuração confirmatória original, permanecem apenas:
 
 - a vogal sustentada `/a/`;
 - a condição normal `n`;
@@ -254,12 +313,45 @@ Na configuração atual, permanecem apenas:
 
 A restrição `/a/` em condição normal aproxima a tarefa vocal da HUPA.
 Sem essa harmonização, o modelo poderia explorar diferenças entre
-vogais, pitch induzido ou modo de fonação, produzindo uma estimativa
+vogais, frequência fundamental induzida ou modo de fonação, produzindo uma estimativa
 inflada de desempenho que não representa patologia.
+
+A extensão `gpu_multivowel_extension_v1` mantém todas as demais regras,
+mas seleciona `/a/`, `/i/` e `/u/`. A separação continua agrupada por
+`speaker_id`, impedindo que vogais do mesmo indivíduo atravessem
+partições. O holdout SVD é reportado globalmente, por vogal e pela média
+macro entre vogais. Essa extensão é registrada separadamente e não
+substitui os resultados `/a/`-only usados na comparação harmonizada com
+a HUPA.
+
+### 5.4. Composição final e exclusões observadas
+
+| Conjunto | Gravações finais | Locutores ou grupos | Cobertura vocal |
+|---|---:|---:|---|
+| HUPA | 411 | 411 grupos presumidos | 411 de /a/ |
+| SVD univogal | 1.997 | 1.637 locutores | 1.997 de /a/ |
+| SVD multivogal | 5.997 | 1.642 locutores | 1.997 de /a/, 2.001 de /i/ e 1.999 de /u/ |
+
+Na HUPA, 12 registros foram excluídos por idade inferior a 18 anos,
+quatro por idade ausente e oito porque cópias idênticas apresentavam
+idades adultas conflitantes. Outras cinco linhas duplicadas foram
+consolidadas.
+
+Na extensão multivogal da SVD, 20.776 registros pertenciam a condições
+de frequência não selecionadas e 2.311 a outros materiais vocais. Também
+foram excluídos 114 registros de menores, 13 gravações abaixo de 0,5
+segundo e dois arquivos NSP que não puderam ser decodificados. Ao final,
+807 linhas redundantes foram reunidas em 789 grupos de duplicatas.
+
+Idade e classe não estão pareadas. A idade mediana foi 30,5 anos entre
+saudáveis e 41,0 anos entre patológicos na HUPA; na SVD /a/, foi 22,8 e
+53,3 anos, respectivamente. A idade permanece como metadado de auditoria e
+não entra em `X`, mas diferenças associadas a ela podem estar refletidas no
+sinal acústico.
 
 ## 6. Deduplicação e verificações de integridade
 
-Depois dos filtros de coorte, cada arquivo recebe um SHA-256 calculado
+Depois dos filtros de elegibilidade, cada arquivo recebe um SHA-256 calculado
 em blocos de 1 MiB. O hash identifica igualdade física de conteúdo sem
 depender de nome ou pasta.
 
@@ -274,7 +366,7 @@ conflitantes são anulados e registrados em
 Há duas regras de falha segura:
 
 - o mesmo áudio não pode possuir rótulos binários diferentes;
-- na coorte adulta, um grupo de áudio duplicado com idades adultas
+- no conjunto adulto, um grupo de áudio duplicado com idades adultas
   conflitantes é excluído integralmente.
 
 ### 6.2. SVD
@@ -471,7 +563,7 @@ Assim, a configuração normal produz `30 × 3 × 5 = 450` atributos. As
 derivadas fornecem informação temporal resumida, embora o modelo final
 continue recebendo um vetor fixo, e não uma sequência de frames.
 
-### 9.6. Qualidade vocal/glotal: 9 atributos
+### 9.6. Qualidade vocal relacionada à fonte: 9 atributos
 
 O Parselmouth/Praat estima:
 
@@ -481,10 +573,15 @@ O Parselmouth/Praat estima:
 - jitter local;
 - shimmer local.
 
-O intervalo de pitch é 75–600 Hz e o passo temporal é 10 ms. Se a
+O intervalo de frequência fundamental é 75–600 Hz e o passo temporal é 10 ms. Se a
 extração falhar para uma amostra, esses nove valores recebem NaN; a
 amostra não é descartada por isso, pois a imputação ocorre dentro do
 pipeline de treino.
+
+Apesar do prefixo histórico `glottal_`, essas colunas são estimativas
+acústicas de frequência, periodicidade e perturbação calculadas sobre o sinal
+de voz. Elas não provêm de fluxo glotal estimado por filtragem inversa e não
+devem ser descritas como medidas diretas da fonte glotal.
 
 ### 9.7. Dimensão e cenários
 
@@ -492,7 +589,7 @@ Com todas as famílias presentes, existem até 596 atributos acústicos:
 
 ```text
 64 harmônicos + 9 energia + 58 entropia + 6 ZCR
-+ 450 MFCC/deltas + 9 glotais = 596
++ 450 MFCC/deltas + 9 de qualidade vocal = 596
 ```
 
 Eles são avaliados em seis cenários:
@@ -502,8 +599,8 @@ Eles são avaliados em seis cenários:
 | `mfcc` | MFCC, delta e delta-delta |
 | `harmonics` | harmônicos espectrais |
 | `energy_entropy_zcr` | energia, entropia e ZCR |
-| `all_without_glottal` | todas, exceto glotais |
-| `glottal` | somente qualidade vocal/glotal |
+| `all_without_glottal` | todas, exceto medidas de qualidade vocal |
+| `glottal` | somente medidas acústicas de qualidade vocal |
 | `all_with_glottal` | todas as famílias |
 
 O cenário também é selecionado apenas por validação cruzada no treino.
@@ -524,7 +621,7 @@ com linhas silenciosamente.
 
 ### 11.1. HUPA → holdout HUPA
 
-A coorte HUPA é dividida em aproximadamente 80% para treino e 20% para
+A HUPA é dividida em aproximadamente 80% para treino e 20% para
 teste. A divisão é agrupada por `speaker_id`, estratificada pela classe
 e escolhida entre os cinco folds candidatos pela combinação de:
 
@@ -569,7 +666,7 @@ combinações tanto no treino quanto no teste.
 
 Um único pipeline é escolhido como resultado primário. A comparação
 secundária SVM–MLP segue a mesma regra pré-especificada. Para cada
-modelo avaliado, os resultados pooled são emitidos:
+modelo avaliado, os resultados mistos são emitidos:
 
 - globalmente;
 - somente para HUPA;
@@ -579,6 +676,35 @@ modelo avaliado, os resultados pooled são emitidos:
 A macro média dá o mesmo peso a cada base, independentemente do número
 de amostras.
 
+### 11.6. SVD multivogal → holdout SVD
+
+A extensão inclui /a/, /i/ e /u/ na condição normal. A divisão continua
+agrupada por locutor, de modo que as três vogais e eventuais sessões de uma
+pessoa permanecem juntas. O campeão é escolhido pelo resultado global da
+validação de origem e avaliado no holdout globalmente, por vogal e pela média
+macro entre vogais. Os recortes por vogal descrevem o comportamento do mesmo
+modelo; eles não produzem três campeões independentes.
+
+### 11.7. SVD multivogal → HUPA
+
+Toda a SVD multivogal é utilizada como origem e a HUPA completa, que contém
+somente /a/, permanece como destino externo. O experimento verifica se a
+diversidade vocálica da origem auxilia a transferência para a tarefa
+disponível no destino. Ele não constitui uma comparação simétrica das três
+vogais entre bases.
+
+### 11.8. Tamanhos efetivamente avaliados
+
+| Experimento | Treino | Teste |
+|---|---:|---:|
+| HUPA interno | 329 | 82 |
+| SVD interno /a/ | 1.598 | 399 |
+| HUPA → SVD | 411 | 1.997 |
+| SVD → HUPA | 1.997 | 411 |
+| HUPA + SVD → misto | 1.927 | 481 |
+| SVD multivogal interno | 4.799 | 1.198 |
+| SVD multivogal → HUPA | 5.997 | 411 |
+
 ## 12. Construção da matriz de modelagem
 
 O rótulo é convertido para inteiro, mas permanece fora de `X`. Também
@@ -586,7 +712,7 @@ ficam fora de `X` todos os campos de identidade, demografia, patologia,
 base, duração, taxa de amostragem, caminho, hash, status e auditoria.
 
 Somente colunas numéricas que pertencem ao cenário acústico selecionado
-entram no modelo. Para cross-database e pooled, usa-se a interseção dos
+entram no modelo. Para os experimentos interbases e misto, usa-se a interseção dos
 atributos disponíveis nas duas bases, e o esquema utilizado é salvo em
 CSV.
 
@@ -651,7 +777,7 @@ A seleção usa cinco folds com `StratifiedGroupKFold`, embaralhamento e
 semente fixa. Cada fold deve conter as duas classes e não pode
 compartilhar locutores entre ajuste e validação.
 
-No pooled, o alvo de estratificação combina:
+No conjunto misto, o alvo de estratificação combina:
 
 ```text
 base::target=<classe>
@@ -672,7 +798,7 @@ origem:
 
 Em cada fold externo, todo o processo de escolha de cenário, família,
 pré-processamento e hiperparâmetros é repetido. São registrados
-desempenho externo, gap treino-validação, configuração selecionada e
+desempenho externo, diferença treino–validação, configuração selecionada e
 frequência de seleção.
 
 Esse procedimento fornece uma estimativa menos otimista do processo de
@@ -738,7 +864,7 @@ sem expô-la à regularização moderada. A remoção de 30 épocas mantém o
 número total de candidatos CUDA igual ao plano anterior.
 
 Os perfis são avaliados como pacotes de regularização. Eles não devem
-ser interpretados no paper como uma ablação capaz de isolar o efeito
+ser interpretados no texto acadêmico como uma ablação capaz de isolar o efeito
 individual de dropout, weight decay ou label smoothing.
 
 ## 16. Seleção parcimoniosa
@@ -776,7 +902,7 @@ com a mesma lógica. Entre candidatos elegíveis, não há preferência fixa
 por SVM linear, SVM RBF ou MLP. O desempate global usa:
 
 1. menor desvio-padrão de CV;
-2. menor valor absoluto do gap entre treino e CV;
+2. menor valor absoluto da diferença entre treino e validação cruzada;
 3. menos atributos selecionados;
 4. maior média de CV;
 5. ordem determinística apenas como último desempate.
@@ -795,7 +921,7 @@ depois que existe uma única configuração selecionada e retreinada na
 origem. Portanto, comparar todos os candidatos na base externa e
 escolher o “vencedor externo” não faz parte do protocolo atual.
 
-Essa separação deve ser refletida no paper:
+Essa separação deve ser refletida no texto acadêmico:
 
 - CV interna: escolha de configuração;
 - CV aninhada: diagnóstico do processo de escolha na origem;
@@ -843,7 +969,7 @@ na réplica.
 Isso respeita a dependência entre sessões do mesmo sujeito. Réplicas que
 não contêm as duas classes são ignoradas.
 
-## 19. Curvas e diagnósticos de overfitting
+## 19. Curvas e diagnósticos de sobreajuste
 
 ### 19.1. Curvas da MLP por época
 
@@ -861,9 +987,9 @@ Por época são registrados:
 - `train_balanced_accuracy`;
 - `valid_balanced_accuracy`.
 
-Esse ajuste diagnóstico existe para visualizar quando a loss de
+Esse ajuste diagnóstico existe para visualizar quando a perda de
 validação começa a subir, quando a acurácia balanceada estagna e como o
-gap se desenvolve. Ele não substitui o modelo final e não escolhe uma
+afastamento entre treino e validação se desenvolve. Ele não substitui o modelo final e não escolhe uma
 nova época depois de olhar o holdout.
 
 ### 19.2. Curva de aprendizado do SVM
@@ -876,7 +1002,7 @@ São registrados:
 
 - acurácia balanceada de treino;
 - acurácia balanceada de validação;
-- gap de generalização;
+- diferença de generalização entre treino e validação;
 - média e desvio-padrão entre folds;
 - grupos usados em cada ponto.
 
@@ -884,23 +1010,24 @@ Treino alto e validação baixa em todas as frações indica alta variância.
 Melhora consistente da validação com mais grupos sugere que mais dados
 reais podem ser mais úteis que aumentar a complexidade.
 
-### 19.3. Gap treino–CV
+### 19.3. Diferença entre treino e validação cruzada
 
 O `GridSearchCV` salva resultados de treino e validação. Para a
-configuração escolhida:
+configuração escolhida. Nos artefatos, essa quantidade ainda aparece com o
+nome técnico `gap`:
 
 ```text
 gap = média_balanced_accuracy_treino
       - média_balanced_accuracy_validação
 ```
 
-O gap participa do desempate global e também é persistido nas métricas.
-Ele não “prova” sozinho que há overfitting, mas permite comparar modelos
+Essa diferença participa do desempate global e também é persistida nas métricas.
+Ela não “prova” sozinha que há sobreajuste, mas permite comparar modelos
 com desempenho de validação semelhante.
 
-## 20. Técnicas usadas para mitigar overfitting
+## 20. Técnicas usadas para mitigar sobreajuste
 
-O overfitting observado não é tratado por uma única técnica. Foram
+O sobreajuste observado não é tratado por uma única técnica. Foram
 combinadas medidas em dados, representação, modelo, seleção e avaliação.
 
 | Técnica | Problema mitigado | Mecanismo e justificativa |
@@ -924,7 +1051,7 @@ combinadas medidas em dados, representação, modelo, seleção e avaliação.
 | Weight decay | pesos de grande magnitude | penaliza parâmetros e favorece soluções mais suaves |
 | Label smoothing | excesso de confiança | evita alvos exatamente 0/1 na loss e reduz logits extremos |
 | One-standard-error + tolerância | escolher ganho irrelevante | prefere candidatos simples quando a diferença de CV não é convincente |
-| Desvio e gap no desempate | soluções instáveis | entre médias semelhantes, favorece menor variabilidade e menor separação treino–CV |
+| Desvio e diferença treino–validação no desempate | soluções instáveis | entre médias semelhantes, favorece menor variabilidade e menor separação treino–validação |
 | CV aninhada repetida | otimismo da seleção | avalia o processo inteiro em folds externos nunca vistos pela busca interna |
 | Holdout/base externa intocados | viés de seleção | impede escolher o vencedor a partir do conjunto declarado como teste |
 | Bootstrap por locutor | incerteza subestimada | preserva a unidade experimental real ao calcular intervalos |
@@ -954,7 +1081,7 @@ deveriam ser misturados ao protocolo confirmatório atual.
 
 O early stopping padrão costuma criar uma divisão aleatória interna.
 Isso poderia colocar sessões do mesmo locutor no treino e na validação,
-ou ignorar os estratos de base/classe do pooled.
+ou ignorar os estratos de base/classe do conjunto misto.
 
 Para manter o mesmo princípio de comparação usado pelos SVMs, o número
 de épocas é tratado como hiperparâmetro e escolhido pelos folds
@@ -963,13 +1090,13 @@ gerada separadamente para diagnóstico.
 
 Se futuramente for implementado early stopping agrupado dentro de cada
 fold, isso constituirá uma alteração de protocolo e deverá receber nova
-versão e justificativa no paper.
+versão e justificativa no texto acadêmico.
 
 ### 20.3. Por que os modelos têm planos específicos
 
 Há um núcleo comum obrigatório:
 
-- mesma coorte;
+- mesmo conjunto de amostras;
 - mesmos atributos candidatos;
 - mesma imputação, escala e seleção;
 - mesmas divisões agrupadas;
@@ -1036,63 +1163,175 @@ racionais e política de seleção. Uma representação canônica recebe um
 SHA-256, gravado também nas métricas. Resultados com hashes diferentes
 não devem ser agregados como se pertencessem ao mesmo protocolo.
 
-## 22. Limitações e interpretação
+### 21.1. Retomada e checkpoints
+
+O argumento `--resume-experiment` reutiliza somente artefatos compatíveis com
+a configuração persistida e o hash ativo. O pipeline pode restaurar:
+
+- a tabela de atributos já extraída;
+- candidatos concluídos da seleção de modelos;
+- folds externos concluídos da validação aninhada;
+- ajustes concluídos da curva de aprendizado agrupada;
+- curvas por época já finalizadas.
+
+Cada candidato mantém identidade de cenário, modelo, parâmetros e protocolo.
+Uma incompatibilidade interrompe a retomada, em vez de combinar resultados
+silenciosamente. Se `metrics.csv` já estiver completo, o estágio de treino é
+tratado como concluído. Esse mecanismo foi necessário após interrupções do
+computador e permitiu continuar as execuções sem reinterpretar checkpoints
+como novas repetições estatísticas.
+
+### 21.2. Ambiente computacional registrado
+
+| Componente | Configuração das execuções finais |
+|---|---|
+| CPU | AMD Ryzen 9 9900X, 12 núcleos e 24 threads |
+| Memória | 30,2 GiB disponibilizados ao WSL2 |
+| GPU | NVIDIA GeForce RTX 5070 Ti, 16.303 MiB |
+| Sistema | Ubuntu 24.04.4 LTS sobre WSL2; kernel Linux 6.18.33.2 |
+| Python | 3.12.3 |
+| PyTorch/CUDA | 2.12.1 / 13.2 |
+| Skorch | 1.4.0 |
+| scikit-learn | 1.8.0 |
+| RAPIDS `cuml.accel` | 26.6.0 |
+| Driver NVIDIA | 610.74 |
+
+O PyTorch solicitou algoritmos determinísticos, desativou o benchmark do
+cuDNN e utilizou uma única GPU. Tempos de execução não foram usados para
+ordenar modelos porque processos independentes puderam compartilhar os
+recursos do computador.
+
+## 22. Resultados consolidados
+
+Os valores abaixo correspondem aos campeões globais definidos somente pela
+validação da origem. A métrica é acurácia balanceada e os intervalos usam
+bootstrap agrupado de 95%.
+
+| Origem → teste | Material | Campeão | Cenário | Resultado [IC95%] |
+|---|---|---|---|---:|
+| HUPA → HUPA | /a/ | SVM RBF | `mfcc` | 0,786 [0,696; 0,876] |
+| SVD → SVD | /a/ | SVM RBF | `all_without_glottal` | 0,654 [0,608; 0,698] |
+| HUPA → SVD | /a/ → /a/ | SVM RBF | `all_without_glottal` | 0,563 [0,538; 0,587] |
+| SVD → HUPA | /a/ → /a/ | MLP | `all_with_glottal` | 0,698 [0,653; 0,741] |
+| HUPA + SVD → misto | /a/ | SVM RBF | `all_without_glottal` | 0,733 [0,692; 0,776] |
+| SVD → SVD | /a/, /i/, /u/ | SVM RBF | `all_with_glottal` | 0,699 [0,655; 0,740] |
+| SVD → HUPA | /a/, /i/, /u/ → /a/ | MLP | `all_with_glottal` | 0,662 [0,617; 0,706] |
+
+### 22.1. Configurações dos campeões
+
+- HUPA interno: SVM RBF, `C=1`, `gamma=0,01`, 50% dos MFCCs;
+- SVD interno /a/: SVM RBF, `C=1`, `gamma=0,001`, 50% dos atributos
+  sem medidas de qualidade vocal;
+- HUPA → SVD: SVM RBF, `C=1`, `gamma=0,01`, 50% dos atributos sem
+  medidas de qualidade vocal;
+- SVD → HUPA: MLP `(8,)`, perfil moderado, dez épocas e 25% dos
+  atributos completos;
+- misto: SVM RBF, `C=10`, `gamma=0,0001`, 50% dos atributos sem
+  medidas de qualidade vocal;
+- SVD multivogal interno: SVM RBF, `C=1`, `gamma=0,001`, 50% dos
+  atributos completos;
+- SVD multivogal → HUPA: MLP `(8,)`, perfil moderado, cinco épocas e
+  50% dos atributos completos.
+
+### 22.2. Recortes e representantes secundários
+
+No teste misto, o campeão obteve 0,733 nos recortes HUPA e SVD e também
+globalmente. Essa igualdade descreve um comportamento equilibrado quando as
+duas bases já estão representadas no treinamento; não comprova transferência
+para uma terceira base.
+
+Na SVD multivogal, o mesmo modelo obteve 0,697 em /a/, 0,706 em /i/ e
+0,694 em /u/. Os intervalos se sobrepõem e não sustentam a superioridade de
+uma vogal.
+
+Alguns representantes secundários superaram numericamente o campeão no teste:
+a MLP chegou a 0,678 na SVD interna e a 0,599 em HUPA → SVD; na transferência
+multivogal para a HUPA, a SVM chegou a 0,694. Esses valores não redefinem o
+resultado primário porque somente se tornaram conhecidos depois da avaliação
+final.
+
+### 22.3. Estabilidade
+
+A validação aninhada repetida produziu 0,754 ± 0,047 na HUPA, 0,724 ±
+0,023 na SVD /a/, 0,707 ± 0,023 no conjunto misto e 0,682 ± 0,014 na
+SVD multivogal. As diferenças finais treino–validação das curvas de
+aprendizado foram 0,198, 0,068, 0,054 e 0,058, respectivamente.
+
+O resultado externo mais crítico foi HUPA → SVD: a validação na origem chegou
+a 0,789, mas a avaliação na SVD foi 0,563. Na direção inversa, a validação na
+SVD foi 0,718 e o teste na HUPA, 0,698. Essa assimetria é uma propriedade do
+pipeline completo e não identifica isoladamente a causa da mudança.
+
+## 23. Limitações e interpretação
 
 - A identidade de locutor da HUPA é uma suposição após deduplicação, não
   um identificador clínico confirmado.
-- HUPA e SVD ainda diferem em idioma, equipamento, sala, critérios de
-  inclusão e distribuição de patologias. A queda cross-database mistura
-  overfitting e domain shift.
-- Os atributos MFCC delta/delta-delta resumem tempo por estatísticas.
-  Eles exploram dinâmica, mas não preservam a sequência completa.
-- A curva por época é um ajuste diagnóstico adicional em um split
-  agrupado; ela não é a estimativa final de desempenho.
-- Os dois perfis de regularização da MLP são pacotes. O protocolo não
-  mede o efeito causal isolado de cada componente.
-- A validação aninhada completa é computacionalmente cara porque repete
-  toda a seleção de cenários e famílias.
-- O backend CPU usa outra implementação de MLP e serve somente ao
-  desenvolvimento. O paper deve reportar apenas execuções CUDA com o
-  mesmo hash confirmatório.
+- HUPA e SVD diferem em idioma, equipamento, população, idade, distribuição
+  diagnóstica e protocolo de aquisição. A avaliação interbases mede o efeito
+  conjunto dessas diferenças.
+- Idade e classe estão associadas nas duas bases. A idade não entra em `X`,
+  mas seus efeitos podem estar presentes no sinal.
+- A tarefa é binária e agrega patologias heterogêneas; o modelo não produz
+  diagnóstico específico nem indicação terapêutica.
+- Os MFCCs, deltas e delta-deltas são resumidos por cinco estatísticas. A
+  sequência completa de quadros não é preservada.
+- As colunas `glottal_` são medidas acústicas de qualidade e periodicidade;
+  não derivam de fluxo glotal estimado.
+- Os holdouts dos experimentos individual, misto e multivogal não contêm
+  exatamente os mesmos grupos. Suas diferenças são descritivas e não causais.
+- A curva por época e a curva de aprendizado são diagnósticos feitos apenas
+  no treinamento; não substituem a avaliação final.
+- Os perfis da MLP são pacotes de regularização e não uma ablação de seus
+  componentes.
+- O backend CPU usa outra implementação de MLP e não integra o relato final.
 
-## 23. Possível extensão temporal profunda
+## 24. Extensões futuras: QCP, matrizes temporais e redes profundas
 
-O pipeline atual transforma cada gravação em um vetor fixo. Uma extensão
-para explorar a sequência completa poderia usar, por exemplo, uma
-CNN temporal, TCN, CNN-BiLSTM ou Transformer pequeno sobre
-log-mel-spectrogramas ou frames de MFCC.
+O pipeline atual transforma cada gravação em um vetor fixo. Uma publicação
+futura poderá preservar as matrizes de MFCC, delta e delta-delta como três
+canais de entrada e estimar explicitamente a fonte glotal por filtragem
+inversa QCP, IAIF ou método relacionado.
 
-Essa extensão não deve substituir silenciosamente o protocolo atual,
-pois mudaria:
+Um desenho recomendado possui dois ramos:
 
-- a unidade de entrada;
-- padding e máscaras;
-- data augmentation;
-- capacidade do modelo;
-- custo de treino;
-- espaço de hiperparâmetros;
-- interpretação dos atributos.
+```text
+MFCC + delta + delta-delta → CNN/ResNet 2D ─┐
+                                            ├→ fusão/atenção → classificador
+representação glotal temporal → CNN 1D/2D ─┘
+```
 
-O desenho mais defensável seria manter os modelos tabulares atuais como
-baselines confirmatórios e registrar o modelo sequencial como protocolo
-novo. Para controlar overfitting, ele precisaria de arquitetura pequena,
-divisões pelos mesmos locutores, regularização, seleção apenas na origem
-e avaliação externa intocada.
+O ramo glotal pode usar fluxo estimado, coeficientes cepstrais da fonte,
+espectrograma glotal e trajetórias alinhadas de F0, HNR, inclinação espectral
+e relações harmônicas. Medidas que exigem vários ciclos, como jitter e
+shimmer, precisam de janelas adequadas e não devem ser convertidas
+artificialmente em valores por frame sem validação.
 
-## 24. Checklist para relatar no paper
+Essa extensão mudará unidade de entrada, alinhamento temporal, padding,
+máscaras, capacidade, regularização e custo. Portanto, deve receber nova
+versão de protocolo. Os modelos tabulares atuais devem permanecer como
+baselines, e o novo estudo deve incluir ablações `cepstral`, `glotal` e
+`fusão`, explicabilidade, múltiplas divisões agrupadas e teste externo
+intocado.
 
-Antes de consolidar resultados:
+## 25. Checklist para relatar no texto acadêmico
 
-- confirmar `protocol_version="gpu_confirmatory_v2"`;
+Antes de copiar valores ou interpretações:
+
+- confirmar a versão aplicável: `gpu_confirmatory_v2` ou
+  `gpu_multivowel_extension_v1`;
 - confirmar `eligible_for_final_reporting=true`;
-- confirmar que os hashes dos experimentos comparados são iguais;
-- auditar exclusões e duplicatas;
-- auditar `holdout_assignments.csv`;
-- verificar ausência de locutores compartilhados;
-- revisar `source_model_selection.csv`;
-- revisar gaps, curvas e estabilidade da CV aninhada;
-- revisar distribuição demográfica e de patologias por base;
-- reportar métricas com intervalos de confiança;
-- declarar explicitamente a limitação de identidade da HUPA;
-- não selecionar modelos pela métrica obtida na base externa;
-- não combinar resultados CPU e CUDA.
+- comparar o hash com a execução canônica do mesmo desenho, sem exigir um
+  único hash para experimentos diferentes;
+- auditar exclusões, duplicatas e contagens do manifesto;
+- auditar `holdout_assignments.csv` e a ausência de grupos compartilhados;
+- revisar `source_model_selection.csv` antes de identificar o campeão;
+- diferenciar campeão global de representante secundário;
+- reportar acurácia balanceada com sensibilidade, especificidade e IC95%;
+- revisar curvas, diferenças treino–validação e estabilidade aninhada;
+- declarar a limitação de identidade da HUPA e o desbalanceamento
+  demográfico;
+- não selecionar modelos pela métrica obtida no holdout ou na base externa;
+- não interpretar comparações entre holdouts diferentes como efeito causal;
+- não combinar resultados CPU e CUDA;
+- apresentar QCP, fluxo glotal e redes matriciais somente como trabalho
+  futuro, salvo se um novo protocolo for implementado e executado.

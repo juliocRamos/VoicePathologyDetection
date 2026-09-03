@@ -71,9 +71,23 @@ class SourceSelectionCandidate:
     scenario: FeatureScenario
     model_spec: ModelSpec
     feature_cols: list[str]
-    grid: GridSearchCV
+    grid: Any
     training_time_seconds: float
     order: int
+
+
+@dataclass
+class RestoredGridSearchResult:
+    best_estimator_: Pipeline | None
+    best_score_: float
+    best_score_std_: float
+    best_train_score_: float
+    generalization_gap_: float
+    numerical_best_index_: int
+    numerical_best_score_: float
+    selection_threshold_: float
+    selection_standard_error_: float
+    best_params_: dict[str, Any]
 
 
 class ModelTrainingRunner:
@@ -127,6 +141,7 @@ class ModelTrainingRunner:
         external_test_features_df: pd.DataFrame | None = None,
         train_dataset_name: str | None = None,
         test_dataset_name: str | None = None,
+        resume: bool = False,
     ):
         ensure_compute_backend_ready(config.compute_backend)
 
@@ -138,6 +153,7 @@ class ModelTrainingRunner:
         self.external_test_features_df = external_test_features_df
         self.train_dataset_name = train_dataset_name
         self.test_dataset_name = test_dataset_name
+        self.resume = resume
         self.source_selection_df = pd.DataFrame()
         self.family_comparison_metrics_df = pd.DataFrame()
 
@@ -145,6 +161,7 @@ class ModelTrainingRunner:
         self.metrics_dir = self.output_dir / "metrics"
         self.predictions_dir = self.output_dir / "predictions"
         self.splits_dir = self.output_dir / "splits"
+        self.checkpoints_dir = self.output_dir / "checkpoints"
         self.training_curves_dir = (
             self.output_dir / "figures" / "training_curves"
         )
@@ -212,6 +229,22 @@ class ModelTrainingRunner:
                     self.external_test_features_df is not None
                 ),
             )
+
+        if self.resume:
+            completed = self._load_completed_metrics()
+            if completed is not None:
+                if not self._needs_svm_learning_curve_completion():
+                    print(
+                        "\nResume checkpoint: final metrics and "
+                        "required auxiliary artifacts already exist; "
+                        "training is complete."
+                    )
+                    return completed
+                print(
+                    "\nResume checkpoint: final metrics exist, but the "
+                    "SVM family champion learning curve is missing. "
+                    "Restoring training artifacts to complete it."
+                )
 
         groups_train = self._get_training_groups(split)
         strata_train = self._get_training_strata(split)
@@ -339,6 +372,25 @@ class ModelTrainingRunner:
             X_train_scenario = split.X_train[feature_cols]
 
             for model_spec in self.model_specs:
+                if self.resume:
+                    restored = self._restore_source_candidate(
+                        scenario=scenario,
+                        model_spec=model_spec,
+                        feature_cols=feature_cols,
+                        X_train=X_train_scenario,
+                        y_train=split.y_train,
+                        groups_train=groups_train,
+                        order=candidate_order,
+                    )
+                    if restored is not None:
+                        print(
+                            "\nResume checkpoint: restored "
+                            f"{scenario.name} | {model_spec.name}"
+                        )
+                        candidates.append(restored)
+                        candidate_order += 1
+                        continue
+
                 print(
                     "\nSelecting on training partition with scenario: "
                     f"{scenario.name} | model_spec: "
@@ -374,6 +426,7 @@ class ModelTrainingRunner:
                         scenario_name=scenario.name,
                         model_name=model_spec.name,
                     )
+                self._save_candidate_checkpoint(candidate)
 
         if not candidates:
             raise RuntimeError(
@@ -398,6 +451,8 @@ class ModelTrainingRunner:
                 eligible_candidates
             )
         )
+        if self.resume:
+            self._validate_persisted_source_selection(selected)
         self.source_selection_df = self._save_source_selection_results(
             candidates=candidates,
             selected=selected,
@@ -416,7 +471,11 @@ class ModelTrainingRunner:
             f"{global_selection_threshold:.4f}"
         )
 
-        best_model = selected.grid.best_estimator_
+        best_model = self._ensure_candidate_estimator(
+            candidate=selected,
+            X_train=split.X_train[selected.feature_cols],
+            y_train=split.y_train,
+        )
 
         if self.config.run_repeated_nested_cv:
             self._run_repeated_nested_cv(
@@ -424,20 +483,6 @@ class ModelTrainingRunner:
                 y_train=split.y_train,
                 meta_train=split.meta_train,
                 numeric_cols=numeric_cols,
-                groups_train=groups_train,
-                strata_train=strata_train,
-            )
-
-        if (
-            self.config.run_grouped_svm_learning_curve
-            and selected.model_spec.name.startswith("svm_")
-        ):
-            self._save_grouped_svm_learning_curve(
-                model=best_model,
-                scenario_name=selected.scenario.name,
-                model_name=selected.model_spec.name,
-                X_train=split.X_train[selected.feature_cols],
-                y_train=split.y_train,
                 groups_train=groups_train,
                 strata_train=strata_train,
             )
@@ -452,8 +497,30 @@ class ModelTrainingRunner:
             curve_candidates.append(selected)
 
         for candidate in curve_candidates:
+            candidate_model = self._ensure_candidate_estimator(
+                candidate=candidate,
+                X_train=split.X_train[candidate.feature_cols],
+                y_train=split.y_train,
+            )
+            if (
+                self.config.run_grouped_svm_learning_curve
+                and self._model_family(
+                    candidate.model_spec.name
+                ) == "svm"
+            ):
+                self._save_grouped_svm_learning_curve(
+                    model=candidate_model,
+                    scenario_name=candidate.scenario.name,
+                    model_name=candidate.model_spec.name,
+                    X_train=split.X_train[
+                        candidate.feature_cols
+                    ],
+                    y_train=split.y_train,
+                    groups_train=groups_train,
+                    strata_train=strata_train,
+                )
             self._save_training_curves(
-                model=candidate.grid.best_estimator_,
+                model=candidate_model,
                 scenario_name=candidate.scenario.name,
                 model_name=candidate.model_spec.name,
                 X_train=split.X_train[candidate.feature_cols],
@@ -864,8 +931,15 @@ class ModelTrainingRunner:
             if strata_train is not None
             else y
         )
-        result_rows: list[dict[str, Any]] = []
-        assignment_rows: list[dict[str, Any]] = []
+        result_rows, assignment_rows = (
+            self._load_nested_cv_checkpoint()
+            if self.resume
+            else ([], [])
+        )
+        completed_folds = {
+            (int(row["repeat"]), int(row["outer_fold"]))
+            for row in result_rows
+        }
 
         for repeat in range(self.config.nested_cv_repeats):
             outer_seed = self.config.random_state + repeat
@@ -883,6 +957,17 @@ class ModelTrainingRunner:
                 outer_fit_indices,
                 outer_validation_indices,
             ) in enumerate(outer_splits):
+                fold_identity = (repeat, outer_fold)
+                if fold_identity in completed_folds:
+                    print(
+                        "\nResume checkpoint: skipping completed "
+                        f"nested CV repeat {repeat + 1}/"
+                        f"{self.config.nested_cv_repeats}, outer fold "
+                        f"{outer_fold + 1}/"
+                        f"{self.config.nested_cv_folds}"
+                    )
+                    continue
+
                 print(
                     "\nNested CV repeat "
                     f"{repeat + 1}/{self.config.nested_cv_repeats}, "
@@ -1067,6 +1152,7 @@ class ModelTrainingRunner:
                     / "repeated_nested_cv_assignments.csv",
                     index=False,
                 )
+                completed_folds.add(fold_identity)
 
         results = pd.DataFrame(result_rows)
         results.to_csv(
@@ -1135,6 +1221,125 @@ class ModelTrainingRunner:
             index=False,
         )
 
+    def _load_nested_cv_checkpoint(
+        self,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        results_path = (
+            self.metrics_dir / "repeated_nested_cv_results.csv"
+        )
+        assignments_path = (
+            self.splits_dir
+            / "repeated_nested_cv_assignments.csv"
+        )
+
+        if not results_path.exists() and not assignments_path.exists():
+            return [], []
+        if not results_path.is_file() or not assignments_path.is_file():
+            raise ValueError(
+                "Nested-CV resume requires both results and split "
+                "assignment checkpoints."
+            )
+
+        results = pd.read_csv(results_path)
+        assignments = pd.read_csv(assignments_path)
+        required_results = {
+            "repeat",
+            "outer_fold",
+            "protocol_hash",
+        }
+        required_assignments = {
+            "repeat",
+            "outer_fold",
+            "partition",
+            "group",
+        }
+        missing_results = required_results - set(results.columns)
+        missing_assignments = (
+            required_assignments - set(assignments.columns)
+        )
+        if missing_results or missing_assignments:
+            raise ValueError(
+                "Nested-CV checkpoint schema is incomplete: "
+                f"results={sorted(missing_results)}, "
+                f"assignments={sorted(missing_assignments)}."
+            )
+        if set(results["protocol_hash"]) != {self.protocol_hash}:
+            raise ValueError(
+                "Nested-CV checkpoint protocol hash does not match "
+                "the active protocol."
+            )
+        if results.duplicated(["repeat", "outer_fold"]).any():
+            raise ValueError(
+                "Nested-CV checkpoint contains duplicated folds."
+            )
+
+        result_folds = {
+            (int(row.repeat), int(row.outer_fold))
+            for row in results.itertuples()
+        }
+        assignment_folds = {
+            (int(row.repeat), int(row.outer_fold))
+            for row in assignments[
+                ["repeat", "outer_fold"]
+            ].drop_duplicates().itertuples(index=False)
+        }
+        if result_folds != assignment_folds:
+            raise ValueError(
+                "Nested-CV result and assignment checkpoints disagree "
+                "on completed folds."
+            )
+
+        valid_folds = {
+            (repeat, fold)
+            for repeat in range(self.config.nested_cv_repeats)
+            for fold in range(self.config.nested_cv_folds)
+        }
+        if not result_folds.issubset(valid_folds):
+            raise ValueError(
+                "Nested-CV checkpoint contains folds outside the "
+                "configured repeat/fold range."
+            )
+
+        for fold_identity, fold_rows in assignments.groupby(
+            ["repeat", "outer_fold"]
+        ):
+            partitions = set(fold_rows["partition"])
+            if partitions != {"outer_train", "outer_validation"}:
+                raise ValueError(
+                    "Nested-CV assignment checkpoint has incomplete "
+                    f"partitions for fold {fold_identity}."
+                )
+            train_groups = set(
+                fold_rows.loc[
+                    fold_rows["partition"].eq("outer_train"),
+                    "group",
+                ]
+            )
+            validation_groups = set(
+                fold_rows.loc[
+                    fold_rows["partition"].eq(
+                        "outer_validation"
+                    ),
+                    "group",
+                ]
+            )
+            if train_groups & validation_groups:
+                raise ValueError(
+                    "Nested-CV checkpoint contains group leakage in "
+                    f"fold {fold_identity}."
+                )
+
+        print(
+            "\nResume checkpoint: restored "
+            f"{len(result_folds)}/"
+            f"{self.config.nested_cv_repeats * self.config.nested_cv_folds} "
+            "nested-CV folds."
+        )
+        return (
+            results.to_dict(orient="records"),
+            assignments.to_dict(orient="records"),
+        )
+
     def _create_output_dirs(self) -> None:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.models_dir.mkdir(parents=True, exist_ok=True)
@@ -1146,6 +1351,10 @@ class ModelTrainingRunner:
             exist_ok=True,
         )
         self.learning_curves_dir.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+        self.checkpoints_dir.mkdir(
             parents=True,
             exist_ok=True,
         )
@@ -2243,6 +2452,394 @@ class ModelTrainingRunner:
 
         cv_results_df.to_csv(output_path, index=False)
 
+    def _candidate_checkpoint_path(
+        self,
+        scenario_name: str,
+        model_name: str,
+    ) -> Path:
+        return (
+            self.checkpoints_dir
+            / f"{scenario_name}__{model_name}.joblib"
+        )
+
+    @staticmethod
+    def _snapshot_grid_result(grid: Any) -> RestoredGridSearchResult:
+        return RestoredGridSearchResult(
+            best_estimator_=grid.best_estimator_,
+            best_score_=float(grid.best_score_),
+            best_score_std_=float(grid.best_score_std_),
+            best_train_score_=float(grid.best_train_score_),
+            generalization_gap_=float(grid.generalization_gap_),
+            numerical_best_index_=int(
+                grid.numerical_best_index_
+            ),
+            numerical_best_score_=float(
+                grid.numerical_best_score_
+            ),
+            selection_threshold_=float(
+                grid.selection_threshold_
+            ),
+            selection_standard_error_=float(
+                grid.selection_standard_error_
+            ),
+            best_params_=dict(grid.best_params_),
+        )
+
+    def _save_candidate_checkpoint(
+        self,
+        candidate: SourceSelectionCandidate,
+    ) -> None:
+        path = self._candidate_checkpoint_path(
+            scenario_name=candidate.scenario.name,
+            model_name=candidate.model_spec.name,
+        )
+        payload = {
+            "protocol_hash": self.protocol_hash,
+            "scenario": candidate.scenario.name,
+            "model": candidate.model_spec.name,
+            "training_time_seconds": float(
+                candidate.training_time_seconds
+            ),
+            "order": int(candidate.order),
+            "grid": self._snapshot_grid_result(candidate.grid),
+        }
+        joblib.dump(payload, path)
+
+    def _restore_source_candidate(
+        self,
+        scenario: FeatureScenario,
+        model_spec: ModelSpec,
+        feature_cols: list[str],
+        X_train: pd.DataFrame,
+        y_train: pd.Series,
+        groups_train: pd.Series | None,
+        order: int,
+    ) -> SourceSelectionCandidate | None:
+        del X_train, y_train, groups_train
+        checkpoint_path = self._candidate_checkpoint_path(
+            scenario_name=scenario.name,
+            model_name=model_spec.name,
+        )
+
+        if checkpoint_path.is_file():
+            payload = joblib.load(checkpoint_path)
+            if payload.get("protocol_hash") != self.protocol_hash:
+                raise ValueError(
+                    "Candidate checkpoint protocol hash does not match "
+                    f"the active protocol: {checkpoint_path}"
+                )
+            if (
+                payload.get("scenario") != scenario.name
+                or payload.get("model") != model_spec.name
+            ):
+                raise ValueError(
+                    f"Candidate checkpoint identity mismatch: "
+                    f"{checkpoint_path}"
+                )
+
+            return SourceSelectionCandidate(
+                scenario=scenario,
+                model_spec=model_spec,
+                feature_cols=feature_cols,
+                grid=payload["grid"],
+                training_time_seconds=float(
+                    payload["training_time_seconds"]
+                ),
+                order=order,
+            )
+
+        cv_path = (
+            self.metrics_dir
+            / f"{scenario.name}_{model_spec.name}_cv_results.csv"
+        )
+        if not cv_path.is_file():
+            return None
+
+        cv_results = pd.read_csv(cv_path)
+        required = {
+            "params",
+            "mean_test_score",
+            "std_test_score",
+            "mean_train_score",
+        }
+        missing = required - set(cv_results.columns)
+        if missing:
+            raise ValueError(
+                f"Resume CV checkpoint {cv_path} is missing columns: "
+                f"{sorted(missing)}"
+            )
+
+        params = [
+            self._parse_persisted_params(
+                value=value,
+                model_spec=model_spec,
+            )
+            for value in cv_results["params"]
+        ]
+        selection = ModelSelectionPolicy.select_grid_candidate(
+            mean_scores=cv_results["mean_test_score"],
+            std_scores=cv_results["std_test_score"],
+            params=params,
+            model_name=model_spec.name,
+            cv_folds=self.config.cv_folds,
+            minimum_score_tolerance=(
+                self.config.selection_score_tolerance
+            ),
+        )
+        selected_index = selection.selected_index
+        best_score = float(
+            cv_results.iloc[selected_index]["mean_test_score"]
+        )
+        best_train_score = float(
+            cv_results.iloc[selected_index]["mean_train_score"]
+        )
+        training_time = float(
+            (
+                pd.to_numeric(
+                    cv_results.get("mean_fit_time"),
+                    errors="coerce",
+                ).fillna(0.0).sum()
+                * self.config.cv_folds
+            )
+        )
+
+        selection_path = (
+            self.metrics_dir / "source_model_selection.csv"
+        )
+        if selection_path.is_file():
+            source_selection = pd.read_csv(selection_path)
+            matching = source_selection[
+                source_selection["scenario"].eq(scenario.name)
+                & source_selection["model"].eq(model_spec.name)
+            ]
+            if len(matching) != 1:
+                raise ValueError(
+                    "Persisted source selection must contain exactly "
+                    f"one row for {scenario.name}/{model_spec.name}."
+                )
+            row = matching.iloc[0]
+            if row["protocol_hash"] != self.protocol_hash:
+                raise ValueError(
+                    "Persisted source selection protocol hash does not "
+                    "match the active protocol."
+                )
+            if not np.isclose(
+                float(row["best_cv_score"]),
+                best_score,
+            ):
+                raise ValueError(
+                    "Persisted source-selection score disagrees with "
+                    f"the CV checkpoint for {scenario.name}/"
+                    f"{model_spec.name}."
+                )
+            training_time = float(row["training_time_seconds"])
+
+        grid = RestoredGridSearchResult(
+            best_estimator_=None,
+            best_score_=best_score,
+            best_score_std_=float(
+                cv_results.iloc[selected_index]["std_test_score"]
+            ),
+            best_train_score_=best_train_score,
+            generalization_gap_=(
+                best_train_score - best_score
+            ),
+            numerical_best_index_=(
+                selection.numerical_best_index
+            ),
+            numerical_best_score_=(
+                selection.numerical_best_score
+            ),
+            selection_threshold_=selection.selection_threshold,
+            selection_standard_error_=selection.standard_error,
+            best_params_=params[selected_index],
+        )
+        return SourceSelectionCandidate(
+            scenario=scenario,
+            model_spec=model_spec,
+            feature_cols=feature_cols,
+            grid=grid,
+            training_time_seconds=training_time,
+            order=order,
+        )
+
+    @staticmethod
+    def _parse_persisted_params(
+        value: Any,
+        model_spec: ModelSpec,
+    ) -> dict[str, Any]:
+        if not isinstance(value, str):
+            raise TypeError(
+                "Persisted parameter payload must be a string."
+            )
+
+        matches = [
+            dict(params)
+            for params in ParameterGrid(model_spec.param_grid)
+            if str(dict(params)) == value
+        ]
+        if len(matches) != 1:
+            raise ValueError(
+                "Persisted parameter payload does not uniquely match "
+                f"the active {model_spec.name} parameter grid: {value}"
+            )
+        return matches[0]
+
+    def _ensure_candidate_estimator(
+        self,
+        candidate: SourceSelectionCandidate,
+        X_train: pd.DataFrame,
+        y_train: pd.Series,
+    ) -> Pipeline:
+        existing = candidate.grid.best_estimator_
+        if existing is not None:
+            return existing
+
+        print(
+            "\nResume checkpoint: refitting selected estimator "
+            f"{candidate.scenario.name} | "
+            f"{candidate.model_spec.name}"
+        )
+        model = self._build_pipeline(candidate.model_spec)
+        model.set_params(**candidate.grid.best_params_)
+        fit_parameters: dict[str, Any] = {}
+
+        if candidate.model_spec.use_balanced_sample_weight:
+            fit_parameters["classifier__sample_weight"] = (
+                compute_sample_weight(
+                    class_weight="balanced",
+                    y=y_train,
+                )
+            )
+
+        model.fit(X_train, y_train, **fit_parameters)
+        candidate.grid.best_estimator_ = model
+        self._save_candidate_checkpoint(candidate)
+        return model
+
+    def _validate_persisted_source_selection(
+        self,
+        selected: SourceSelectionCandidate,
+    ) -> None:
+        path = self.metrics_dir / "source_model_selection.csv"
+        if not path.is_file():
+            return
+
+        persisted = pd.read_csv(path)
+        if (
+            "protocol_hash" not in persisted
+            or set(persisted["protocol_hash"]) != {self.protocol_hash}
+        ):
+            raise ValueError(
+                "Persisted source selection has an incompatible "
+                "protocol hash."
+            )
+        selected_rows = persisted[
+            persisted["selected_for_evaluation"].astype(bool)
+        ]
+        if len(selected_rows) != 1:
+            raise ValueError(
+                "Persisted source selection must identify one primary "
+                "candidate."
+            )
+
+        identity = (
+            selected_rows.iloc[0]["scenario"],
+            selected_rows.iloc[0]["model"],
+        )
+        restored_identity = (
+            selected.scenario.name,
+            selected.model_spec.name,
+        )
+        if identity != restored_identity:
+            raise ValueError(
+                "Resume would change the primary model selected before "
+                f"interruption: persisted={identity}, "
+                f"restored={restored_identity}."
+            )
+
+    def _load_completed_metrics(self) -> pd.DataFrame | None:
+        path = self.metrics_dir / "metrics.csv"
+        if not path.is_file():
+            return None
+
+        metrics = pd.read_csv(path)
+        if (
+            "protocol_hash" not in metrics
+            or set(metrics["protocol_hash"]) != {self.protocol_hash}
+        ):
+            raise ValueError(
+                "Completed metrics have an incompatible protocol hash."
+            )
+
+        selection_path = (
+            self.metrics_dir / "source_model_selection.csv"
+        )
+        if selection_path.is_file():
+            self.source_selection_df = pd.read_csv(selection_path)
+        comparison_path = (
+            self.metrics_dir / "family_comparison_metrics.csv"
+        )
+        if comparison_path.is_file():
+            self.family_comparison_metrics_df = pd.read_csv(
+                comparison_path
+            )
+        return metrics
+
+    def _needs_svm_learning_curve_completion(self) -> bool:
+        if not self.config.run_grouped_svm_learning_curve:
+            return False
+
+        identities: set[tuple[str, str]] = set()
+        comparison = self.family_comparison_metrics_df
+        if not comparison.empty:
+            model_family = (
+                comparison["model_family"].astype("string")
+                if "model_family" in comparison
+                else comparison["model"].map(self._model_family)
+            )
+            svm_rows = comparison[model_family.eq("svm")]
+            identities.update(
+                zip(
+                    svm_rows["scenario"].astype(str),
+                    svm_rows["model"].astype(str),
+                )
+            )
+
+        if not identities and not self.source_selection_df.empty:
+            selected = self.source_selection_df[
+                self.source_selection_df[
+                    "selected_for_evaluation"
+                ].astype(bool)
+            ]
+            selected = selected[
+                selected["model"].map(self._model_family).eq("svm")
+            ]
+            identities.update(
+                zip(
+                    selected["scenario"].astype(str),
+                    selected["model"].astype(str),
+                )
+            )
+
+        for scenario_name, model_name in identities:
+            file_stem = (
+                f"{scenario_name}_{model_name}_"
+                "grouped_learning_curve"
+            )
+            required_paths = (
+                self.learning_curves_dir / f"{file_stem}.csv",
+                self.learning_curves_dir
+                / f"{file_stem}_summary.csv",
+                self.learning_curves_dir / f"{file_stem}.png",
+                self.splits_dir
+                / f"{file_stem}_assignments.csv",
+            )
+            if not all(path.is_file() for path in required_paths):
+                return True
+
+        return False
+
     def _save_model(
         self,
         model: Pipeline,
@@ -2292,6 +2889,8 @@ class ModelTrainingRunner:
             config=self.config,
             learning_curves_dir=self.learning_curves_dir,
             splits_dir=self.splits_dir,
+            resume=self.resume,
+            protocol_hash=self.protocol_hash,
         ).run(
             model=model,
             scenario_name=scenario_name,
@@ -2313,6 +2912,17 @@ class ModelTrainingRunner:
         groups_train: pd.Series | None,
         strata_train: pd.Series | None,
     ) -> None:
+        file_stem = f"{scenario_name}_{model_name}_training_curve"
+        curve_path = (
+            self.training_curves_dir / f"{file_stem}.csv"
+        )
+        if self.resume and curve_path.is_file():
+            print(
+                "\nResume checkpoint: skipping completed training "
+                f"curve {scenario_name} | {model_name}"
+            )
+            return
+
         classifier = model.named_steps["classifier"]
         history = self._build_grouped_curve_history(
             model=model,
@@ -2330,11 +2940,7 @@ class ModelTrainingRunner:
         if history is None:
             return
 
-        file_stem = f"{scenario_name}_{model_name}_training_curve"
-        history.to_csv(
-            self.training_curves_dir / f"{file_stem}.csv",
-            index=False,
-        )
+        history.to_csv(curve_path, index=False)
         TrainingCurveVisualizer.save(
             history=history,
             output_path=(

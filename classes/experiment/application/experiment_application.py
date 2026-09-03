@@ -29,6 +29,7 @@ class ExperimentApplication:
 
         configs = ExperimentConfigFactory.build(
             compute_backend=request.compute_backend,
+            svd_vowels=request.svd_vowels,
         )
         runner = ExperimentRunnerFactory(
             settings=self.settings,

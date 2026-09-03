@@ -47,6 +47,7 @@ class HUPAExperimentRunner:
         feature_config=None,
         manifest_config: HUPATrainingManifestConfig | None = None,
         training_config: TrainingConfig | None = None,
+        experiment_root: str | Path | None = None,
     ):
         self.dataset_root = Path(dataset_root)
         self.data_root = Path(data_root)
@@ -63,16 +64,28 @@ class HUPAExperimentRunner:
             or TrainingConfig(group_col="speaker_id")
         )
 
-        self.paths = ExperimentPaths.create(
-            data_root=self.data_root,
-            dataset_name="HUPA",
-            experiment_name=self.experiment_name,
+        self.resume = experiment_root is not None
+        self.paths = (
+            ExperimentPaths.open_existing(
+                root_dir=experiment_root,
+                dataset_name="HUPA",
+                experiment_name=self.experiment_name,
+            )
+            if experiment_root is not None
+            else ExperimentPaths.create(
+                data_root=self.data_root,
+                dataset_name="HUPA",
+                experiment_name=self.experiment_name,
+            )
         )
 
     def run(
         self,
         stage: ExperimentStage = ExperimentStage.PREPARE,
     ) -> pd.DataFrame | None:
+        if self.resume:
+            return self._run_resumed(stage=stage)
+
         self.save_config(stage=stage)
 
         raw_manifest = self.build_manifest()
@@ -105,6 +118,65 @@ class HUPAExperimentRunner:
 
         print(f"\nExperiment saved in:\n{self.paths.root_dir}")
         return features_df
+
+    def _run_resumed(
+        self,
+        stage: ExperimentStage,
+    ) -> pd.DataFrame | None:
+        self._validate_resume_config()
+        feature_path = (
+            self.paths.features_dir / "hupa_features_v1.parquet"
+        )
+
+        if not stage.includes_feature_extraction:
+            raise ValueError(
+                "Resume requires --stage features or --stage train."
+            )
+        if not feature_path.is_file():
+            raise FileNotFoundError(
+                f"Resume feature checkpoint is missing: {feature_path}"
+            )
+
+        print(f"Resuming HUPA experiment from:\n{self.paths.root_dir}")
+        features_df = pd.read_parquet(feature_path)
+
+        if stage.includes_training:
+            self.train_models(features_df, resume=True)
+
+        return features_df
+
+    def _validate_resume_config(self) -> None:
+        if not self.paths.config_path.is_file():
+            raise FileNotFoundError(
+                f"Resume config is missing: {self.paths.config_path}"
+            )
+
+        persisted = json.loads(
+            self.paths.config_path.read_text(encoding="utf-8")
+        )
+        training = persisted.get("training_config", {})
+        actual = {
+            "dataset_name": persisted.get("dataset_name"),
+            "protocol_version": training.get("protocol_version"),
+            "compute_backend": training.get("compute_backend"),
+            "random_state": training.get("random_state"),
+        }
+        expected = {
+            "dataset_name": "HUPA",
+            "protocol_version": (
+                self.training_config.protocol_version
+            ),
+            "compute_backend": (
+                self.training_config.compute_backend.value
+            ),
+            "random_state": self.training_config.random_state,
+        }
+
+        if actual != expected:
+            raise ValueError(
+                "Resume configuration does not match the requested "
+                f"protocol: expected={expected}, persisted={actual}."
+            )
 
     def save_config(self, stage: ExperimentStage) -> None:
         config_data = {
@@ -315,7 +387,11 @@ class HUPAExperimentRunner:
             )
             file.write("\n")
 
-    def train_models(self, features_df: pd.DataFrame) -> pd.DataFrame:
+    def train_models(
+        self,
+        features_df: pd.DataFrame,
+        resume: bool = False,
+    ) -> pd.DataFrame:
         print("\n[6/6] Training HUPA models...")
 
         feature_scenarios = TrainingPlan.default_feature_scenarios()
@@ -331,6 +407,7 @@ class HUPAExperimentRunner:
             config=self.training_config,
             feature_scenarios=feature_scenarios,
             model_specs=model_specs,
+            resume=resume,
         )
 
         metrics_df = training_runner.run()

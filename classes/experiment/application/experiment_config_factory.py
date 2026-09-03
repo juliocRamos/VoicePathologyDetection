@@ -30,12 +30,15 @@ class ExperimentConfigFactory:
     def build(
         cls,
         compute_backend: ComputeBackend,
+        svd_vowels: tuple[str, ...] = ("a",),
     ) -> ExperimentConfigBundle:
         return ExperimentConfigBundle(
             preprocess=cls.build_preprocess_config(),
             features=cls.build_feature_config(),
             hupa_manifest=cls.build_hupa_manifest_config(),
-            svd_manifest=cls.build_svd_manifest_config(),
+            svd_manifest=cls.build_svd_manifest_config(
+                vowels=svd_vowels,
+            ),
             training=cls.build_training_config(
                 compute_backend=compute_backend,
             ),
@@ -86,9 +89,11 @@ class ExperimentConfigFactory:
         return cls.build_hupa_manifest_config()
 
     @staticmethod
-    def build_svd_manifest_config() -> SVDTrainingManifestConfig:
+    def build_svd_manifest_config(
+        vowels: tuple[str, ...] = ("a",),
+    ) -> SVDTrainingManifestConfig:
         return SVDTrainingManifestConfig(
-            vowels=("a",),
+            vowels=vowels,
             conditions=("n",),
             adults_only=True,
             minimum_age=18.0,
@@ -100,8 +105,9 @@ class ExperimentConfigFactory:
     @classmethod
     def build_cross_svd_manifest_config(
         cls,
+        vowels: tuple[str, ...] = ("a",),
     ) -> SVDTrainingManifestConfig:
-        return cls.build_svd_manifest_config()
+        return cls.build_svd_manifest_config(vowels=vowels)
 
     @staticmethod
     def build_training_config(
